@@ -150,71 +150,71 @@ void loop()
       rightOnLine = isValueOnLine(readLineSensor(rightIndex));
     }
   } while (!isLineFounded && leftIndex >= 0 && rightIndex < LINE_SENSOR_COUNT);
+}
+// motorfunctions
 
-  // motorfunctions
+void forwardMove()
+{
+  analogWrite(LEFT_FWD, WEAK_WHEEL);
+  analogWrite(RIGHT_FWD, SPEED_FAST);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
 
-  void forwardMove()
-  {
-    analogWrite(LEFT_FWD, WEAK_WHEEL);
-    analogWrite(RIGHT_FWD, SPEED_FAST);
-    analogWrite(LEFT_BWD, 0);
-    analogWrite(RIGHT_BWD, 0);
-  }
+void applyWheelSpeeds(int leftSpeed, int rightSpeed)
+{
+  // TODO fix this?
+  analogWrite(LEFT_FWD, leftSpeed);
+  analogWrite(RIGHT_FWD, rightSpeed);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
 
-  void applyWheelSpeeds(int leftSpeed, int rightSpeed)
-  {
-    // TODO fix this?
-    analogWrite(LEFT_FWD, leftSpeed);
-    analogWrite(RIGHT_FWD, rightSpeed);
-    analogWrite(LEFT_BWD, 0);
-    analogWrite(RIGHT_BWD, 0);
-  }
+void stopMotors()
+{
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
 
-  void stopMotors()
-  {
-    analogWrite(LEFT_FWD, 0);
-    analogWrite(RIGHT_FWD, 0);
-    analogWrite(LEFT_BWD, 0);
-    analogWrite(RIGHT_BWD, 0);
-  }
+void curveRight()
+{
+  analogWrite(LEFT_FWD, SPEED_FAST);
+  analogWrite(RIGHT_FWD, SPEED_SLOW);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
 
-  void curveRight()
-  {
-    analogWrite(LEFT_FWD, SPEED_FAST);
-    analogWrite(RIGHT_FWD, SPEED_SLOW);
-    analogWrite(LEFT_BWD, 0);
-    analogWrite(RIGHT_BWD, 0);
-  }
+void curveLeft()
+{
+  analogWrite(RIGHT_FWD, SPEED_FAST);
+  analogWrite(LEFT_FWD, SPEED_SLOW);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
 
-  void curveLeft()
-  {
-    analogWrite(RIGHT_FWD, SPEED_FAST);
-    analogWrite(LEFT_FWD, SPEED_SLOW);
-    analogWrite(LEFT_BWD, 0);
-    analogWrite(RIGHT_BWD, 0);
-  }
+void curveRightCorrect()
+{
+  analogWrite(LEFT_FWD, SPEED_FAST);
+  analogWrite(RIGHT_FWD, SPEED_FAST - 40); // abit more to the right
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
 
-  void curveRightCorrect()
-  {
-    analogWrite(LEFT_FWD, SPEED_FAST);
-    analogWrite(RIGHT_FWD, SPEED_FAST - 40); // abit more to the right
-    analogWrite(LEFT_BWD, 0);
-    analogWrite(RIGHT_BWD, 0);
-  }
+// sensor
 
-  // sensor
+float readDistance()
+{
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
 
-  float readDistance()
-  {
-    digitalWrite(TRIG, LOW);
-    delayMicroseconds(2);
-    digitalWrite(TRIG, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(TRIG, LOW);
+  long duration = pulseIn(ECHO, HIGH, 30000);
+  if (duration == 0)
+    return 999;
 
-    long duration = pulseIn(ECHO, HIGH, 30000);
-    if (duration == 0)
-      return 999;
-
-    return duration * 0.034 / 2.0;
-  }
+  return duration * 0.034 / 2.0;
+}
