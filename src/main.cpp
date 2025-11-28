@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "lineDetect.h"
 
 #define LEFT_BWD 9
 #define LEFT_FWD 6
@@ -22,18 +23,9 @@ float readDistance();
 void forwardMove();
 void backwardMove();
 void stopMotors();
-void turnLeft();
-void turnRight();
-
-//functions for the servo
-void servoWriteMicroseconds(int us);
-void servoWrite(int angle);
-void lookCenter();
-void lookLeft();
-void lookRight();
-
-bool scanDirectionRight();
-bool scanDirectionLeft();
+void curveRight();
+void curveLeft();
+void curveRightCorrect();
 
 void setup() {
   pinMode(LEFT_FWD, OUTPUT);
@@ -49,6 +41,8 @@ void setup() {
 
   Serial.begin(9600);
   stopMotors();
+
+  initLineSensors();
 }
 
 void loop() {
@@ -99,93 +93,25 @@ void loop() {
     return;
   }
 
+  // drives forwards normally
   forwardMove();
-
-  // checks if BDP is stuck and tries to get itself out of its current situation
-  static float lastDistance = 0;
-  static unsigned long lastCheck = 0;
-  static int stuckCounter = 0;
-
-  if (millis() - lastCheck > 120) {
-    lastCheck = millis();
-    float distNow = readDistance();
-
-    if (abs(distNow - lastDistance) < 1.5) stuckCounter++;
-    else stuckCounter = 0;
-
-    lastDistance = distNow;
-
-    if (stuckCounter > 6) {
-      stopMotors();
-      delay(80);
-
-      backwardMove();
-      delay(350);
-      stopMotors();
-      delay(80);
-
-      if (millis() % 2 == 0) turnRight();
-      else turnLeft();
-
-      delay(TURN_90);
-      stopMotors();
-      delay(120);
-
-      stuckCounter = 0;
-      return;
-    }
-  }
 }
 
+// motorfunctions
 
-//function for the servo 
-void servoWriteMicroseconds(int us) {
-  digitalWrite(SERVO_PIN, HIGH);
-  delayMicroseconds(us);
-  digitalWrite(SERVO_PIN, LOW);
-  delay(20); // servo refresh
+void forwardMove()
+{
+  analogWrite(LEFT_FWD, WEAK_WHEEL);
+  analogWrite(RIGHT_FWD, SPEED_FAST);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
 }
 
-void servoWrite(int angle) { //puts the angle to the right direction
-  int pulse = map(angle, 0, 180, 1000, 2000);
-  servoWriteMicroseconds(pulse);
-}
-
-//turns back to the front to check
-void lookCenter() {
-  for (int i = 0; i < 5; i++) servoWrite(50);
-}
-
-//turns the neck to the left to check
-void lookLeft() {
-  for (int i = 0; i < 5; i++) servoWrite(200);
-}
-
-//turns the neck to the right to check
-void lookRight() {
-  for (int i = 0; i < 5; i++) servoWrite(-100);
-}
-
-//scanning the right side
-bool scanDirectionRight() {
-  lookRight();
-  float d = readDistance();
-  lookCenter();
-  return d > CLEAR_DIST;
-}
-
-//scanning the left side
-bool scanDirectionLeft() {
-  lookLeft();
-  float d = readDistance();
-  lookCenter();
-  return d > CLEAR_DIST;
-}
-
-//functions for all the movements
-void forwardMove() {
-  analogWrite(LEFT_FWD, 147);
-  analogWrite(RIGHT_FWD, FORWARD_SPEED);
+void applyWheelSpeeds(int leftSpeed, int rightSpeed)
+{
+  // TODO fix this?
+  analogWrite(LEFT_FWD, leftSpeed);
+  analogWrite(RIGHT_FWD, rightSpeed);
   analogWrite(LEFT_BWD, 0);
   analogWrite(RIGHT_BWD, 0);
 }
