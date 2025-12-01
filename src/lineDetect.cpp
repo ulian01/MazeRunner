@@ -15,7 +15,7 @@ const int LINE_THRESHOLD = 500;
 const int BASE_SPEED    = 120;  // forward speed (normal curves)
 const int MAX_SPEED     = 255;
 const int TURN_GAIN     = 45;   // for normal steering
-const int PIVOT_SPEED   = 160;  // speed when pivoting on sharp corners
+const int PIVOT_SPEED   = 190;  // speed when pivoting on sharp corners
 
 // --- Motor Pins ---
 #define LEFT_BWD 9
@@ -86,7 +86,7 @@ void loop() {
   // ----- Decide movement -----
   if (numOnLine == 0) {
     // Line lost → search using last direction
-    int searchSpeed = BASE_SPEED / 2;
+    int searchSpeed = BASE_SPEED;
 
     if (lastError < 0) {
       applyWheelSpeeds(0, searchSpeed);   // search left
