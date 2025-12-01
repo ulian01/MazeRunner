@@ -12,10 +12,10 @@ const int sensorPins[LINE_SENSOR_COUNT] = {
 const int LINE_THRESHOLD = 500;
 
 // --- Motor Speed Constants ---
-const int BASE_SPEED    = 120;  // forward speed (normal curves)
+const int BASE_SPEED    = 135;  // forward speed (normal curves)
 const int MAX_SPEED     = 255;
 const int TURN_GAIN     = 45;   // for normal steering
-const int PIVOT_SPEED   = 190;  // speed when pivoting on sharp corners
+const int PIVOT_SPEED   = 250;  // speed when pivoting on sharp corners
 
 // --- Motor Pins ---
 #define LEFT_BWD 9
@@ -70,18 +70,14 @@ void loop() {
     bool onLine = sensorOnLine(i);
 
     if (onLine) {
-      if (firstOn == -1) firstOn = i;
+      if (firstOn == -2) firstOn = i;
       lastOn = i;
 
       numOnLine++;
       float pos = i - centerIndex;
       weightedSum += pos;
     }
-
-    // Debug pattern:
-    // Serial.print(onLine ? "1" : "0");
   }
-  // Serial.println();
 
   // ----- Decide movement -----
   if (numOnLine == 0) {
@@ -96,14 +92,12 @@ void loop() {
   }
   else if (numOnLine <= 2 &&
            (firstOn == 0 || lastOn == LINE_SENSOR_COUNT - 1)) {
-    // Very few sensors active AND they are at the extreme left or right
-    // → treat as a SHARP CORNER and pivot in place.
-
+    // ----- SHARP CORNER detection -----
+    // firstOn == 0 → extreme left → pivot left
+    // lastOn == 7 → extreme right → pivot right
     if (firstOn == 0) {
-      // Line is at extreme LEFT → sharp left turn
       pivotLeft();
     } else {
-      // Line is at extreme RIGHT → sharp right turn
       pivotRight();
     }
   }
@@ -127,16 +121,14 @@ void loop() {
 }
 
 // --- Sensors ---
-
 bool sensorOnLine(int index) {
   int raw = analogRead(sensorPins[index]);
-  // If black gives HIGH values on your board, flip to (raw > LINE_THRESHOLD)
+  // For your sensors: black < LINE_THRESHOLD
   bool onLine = (raw < LINE_THRESHOLD);
   return onLine;
 }
 
 // --- Motors ---
-
 void applyWheelSpeeds(int leftSpeed, int rightSpeed) {
   leftSpeed  = constrain(leftSpeed, -255, 255);
   rightSpeed = constrain(rightSpeed, -255, 255);
@@ -169,13 +161,15 @@ void stopMotors() {
 
 // Pivot in place to handle sharp turns
 void pivotLeft() {
-  // left wheel backward, right wheel forward
   applyWheelSpeeds(-PIVOT_SPEED, PIVOT_SPEED);
+  delay(350);  // fixed duration pivot
+  stopMotors();
 }
 
 void pivotRight() {
-  // left wheel forward, right wheel backward
   applyWheelSpeeds(PIVOT_SPEED, -PIVOT_SPEED);
+  delay(350);
+  stopMotors();
 }
 
 // --- Ultrasonic (unused) ---
