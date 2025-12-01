@@ -1,16 +1,14 @@
-// a0 to a7
-// 8 data points for line detection
-
-#pragma once
+#ifndef LINEDETECT_H
+#define LINEDETECT_H
 
 #include <Arduino.h>
 
-#define LINE_SENSOR_COUNT 8
-#define LINE_SENSOR_START A0
+// Change these to match your actual wiring!
+#define LINE_SENSOR_START A0  // The first sensor pin
+#define LINE_SENSOR_COUNT 8   // Total number of sensors
 
 void initLineSensors();
+int readLineSensor(int index); // Prototype must match 'int'
+bool isValueOnLine(int value); // Prototype must match 'int'
 
-// int values vary from 0 to 1023
-byte readLineSensor(int index);
-
-bool isValueOnLine(byte value);
+#endif
