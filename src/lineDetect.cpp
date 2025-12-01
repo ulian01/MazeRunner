@@ -1,26 +1,21 @@
 #include <Arduino.h>
 
 // --- Line Sensor Setup ---
-const int LINE_SENSOR_COUNT = 8;
+const int LINE_SENSOR_COUNT = 9;
 
 // LEFT → RIGHT physical order
 const int sensorPins[LINE_SENSOR_COUNT] = {
-  A7, A6, A5, A4, A3, A2, A1, A0
+  A8, A7, A6, A5, A4, A3, A2, A1
 };
 
 // Tune this after reading raw values
 const int LINE_THRESHOLD = 500;
 
 // --- Motor Speed Constants ---
-const int BASE_SPEED       = 135;  // forward speed (normal curves)
-const int MAX_SPEED        = 255;
-const int TURN_GAIN        = 45;   // for normal steering
-
-// Pivot speeds & durations (can be tuned separately)
-const int PIVOT_LEFT_SPEED  = 250;
-const int PIVOT_RIGHT_SPEED = 250;
-const int PIVOT_LEFT_TIME   = 350;  // ms
-const int PIVOT_RIGHT_TIME  = 420;  // a bit longer to help right turns
+const int BASE_SPEED    = 135;  // forward speed (normal curves)
+const int MAX_SPEED     = 255;
+const int TURN_GAIN     = 45;   // for normal steering
+const int PIVOT_SPEED   = 250;  // speed when pivoting on sharp corners
 
 // --- Motor Pins ---
 #define LEFT_BWD 9
@@ -75,8 +70,7 @@ void loop() {
     bool onLine = sensorOnLine(i);
 
     if (onLine) {
-      // FIX: should check for -1, not -2
-      if (firstOn == -1) firstOn = i;
+      if (firstOn == -2) firstOn = i;
       lastOn = i;
 
       numOnLine++;
@@ -167,14 +161,14 @@ void stopMotors() {
 
 // Pivot in place to handle sharp turns
 void pivotLeft() {
-  applyWheelSpeeds(-PIVOT_LEFT_SPEED, PIVOT_LEFT_SPEED);
-  delay(PIVOT_LEFT_TIME);
+  applyWheelSpeeds(-PIVOT_SPEED, PIVOT_SPEED);
+  delay(350);  // fixed duration pivot
   stopMotors();
 }
 
 void pivotRight() {
-  applyWheelSpeeds(PIVOT_RIGHT_SPEED, -PIVOT_RIGHT_SPEED);
-  delay(PIVOT_RIGHT_TIME);
+  applyWheelSpeeds(PIVOT_SPEED, -PIVOT_SPEED);
+  delay(350);
   stopMotors();
 }
 
