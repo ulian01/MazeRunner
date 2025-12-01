@@ -12,10 +12,15 @@ const int sensorPins[LINE_SENSOR_COUNT] = {
 const int LINE_THRESHOLD = 500;
 
 // --- Motor Speed Constants ---
-const int BASE_SPEED    = 135;  // forward speed (normal curves)
-const int MAX_SPEED     = 255;
-const int TURN_GAIN     = 45;   // for normal steering
-const int PIVOT_SPEED   = 250;  // speed when pivoting on sharp corners
+const int BASE_SPEED       = 135;  // forward speed (normal curves)
+const int MAX_SPEED        = 255;
+const int TURN_GAIN        = 45;   // for normal steering
+
+// Pivot speeds & durations (can be tuned separately)
+const int PIVOT_LEFT_SPEED  = 250;
+const int PIVOT_RIGHT_SPEED = 250;
+const int PIVOT_LEFT_TIME   = 350;  // ms
+const int PIVOT_RIGHT_TIME  = 420;  // a bit longer to help right turns
 
 // --- Motor Pins ---
 #define LEFT_BWD 9
@@ -70,7 +75,8 @@ void loop() {
     bool onLine = sensorOnLine(i);
 
     if (onLine) {
-      if (firstOn == -2) firstOn = i;
+      // FIX: should check for -1, not -2
+      if (firstOn == -1) firstOn = i;
       lastOn = i;
 
       numOnLine++;
@@ -161,14 +167,14 @@ void stopMotors() {
 
 // Pivot in place to handle sharp turns
 void pivotLeft() {
-  applyWheelSpeeds(-PIVOT_SPEED, PIVOT_SPEED);
-  delay(350);  // fixed duration pivot
+  applyWheelSpeeds(-PIVOT_LEFT_SPEED, PIVOT_LEFT_SPEED);
+  delay(PIVOT_LEFT_TIME);
   stopMotors();
 }
 
 void pivotRight() {
-  applyWheelSpeeds(PIVOT_SPEED, -PIVOT_SPEED);
-  delay(350);
+  applyWheelSpeeds(PIVOT_RIGHT_SPEED, -PIVOT_RIGHT_SPEED);
+  delay(PIVOT_RIGHT_TIME);
   stopMotors();
 }
 
