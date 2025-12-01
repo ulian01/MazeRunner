@@ -3,7 +3,7 @@
 // --- Line Sensor Setup ---
 const int LINE_SENSOR_COUNT = 8;
 const int sensorPins[LINE_SENSOR_COUNT] = {
-  A0, A1, A2, A3, A4, A5, A6, A7
+  A7, A6, A5, A4, A3, A2, A1, A0
 };
 
 // Tune this depending on your sensors & surface:
@@ -95,7 +95,7 @@ void loop() {
     applyWheelSpeeds(leftSpeed, rightSpeed);
   } else {
     // 3. Line lost → search using last direction
-    int searchSpeed = BASE_SPEED / 2;
+    int searchSpeed = BASE_SPEED;
 
     if (lastError < 0) {
       // Line was on the left → turn left to find it
