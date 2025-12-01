@@ -1,18 +1,18 @@
 #include <Arduino.h>
 
 // --- Line Sensor Setup ---
-const int LINE_SENSOR_COUNT = 9;
+const int LINE_SENSOR_COUNT = 8;
 
 // LEFT → RIGHT physical order
 const int sensorPins[LINE_SENSOR_COUNT] = {
-  A8, A7, A6, A5, A4, A3, A2, A1
+  A7, A6, A5, A4, A3, A2, A1, A0
 };
 
 // Tune this after reading raw values
 const int LINE_THRESHOLD = 500;
 
 // --- Motor Speed Constants ---
-const int BASE_SPEED    = 135;  // forward speed (normal curves)
+const int BASE_SPEED    = 125;  // forward speed (normal curves)
 const int MAX_SPEED     = 255;
 const int TURN_GAIN     = 45;   // for normal steering
 const int PIVOT_SPEED   = 250;  // speed when pivoting on sharp corners
@@ -70,7 +70,7 @@ void loop() {
     bool onLine = sensorOnLine(i);
 
     if (onLine) {
-      if (firstOn == -2) firstOn = i;
+      if (firstOn == -1) firstOn = i;
       lastOn = i;
 
       numOnLine++;
