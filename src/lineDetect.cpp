@@ -12,7 +12,7 @@ const int sensorPins[LINE_SENSOR_COUNT] = {
 const int LINE_THRESHOLD = 500;
 
 // --- Motor Speed Constants ---
-const int BASE_SPEED    = 125;  // forward speed (normal curves)
+const int BASE_SPEED    = 135;  // forward speed (normal curves)
 const int MAX_SPEED     = 255;
 const int TURN_GAIN     = 45;   // for normal steering
 const int PIVOT_SPEED   = 250;  // speed when pivoting on sharp corners
@@ -81,20 +81,31 @@ void loop() {
 
   // ----- Decide movement -----
   if (numOnLine == 0) {
-    // Line lost → search using last direction
-    int searchSpeed = BASE_SPEED;
+    // *** CHANGE STARTS HERE ***
 
-    if (lastError < 0) {
-      applyWheelSpeeds(0, searchSpeed);   // search left
+    // If we just had the line more or less centered,
+    // treat this as a small gap/crossing and KEEP GOING STRAIGHT.
+    float absErr = lastError;
+    if (absErr < 0) absErr = -absErr;
+
+    if (absErr < 0.4) {
+      // lastError ~ 0 → go straight through crossing
+      applyWheelSpeeds(BASE_SPEED, BASE_SPEED);
     } else {
-      applyWheelSpeeds(searchSpeed, 0);   // search right
+      // Real line loss → search in last direction
+      int searchSpeed = BASE_SPEED;
+
+      if (lastError < 0) {
+        applyWheelSpeeds(0, searchSpeed);   // search left
+      } else {
+        applyWheelSpeeds(searchSpeed, 0);   // search right
+      }
     }
+    // *** CHANGE ENDS HERE ***
   }
   else if (numOnLine <= 2 &&
            (firstOn == 0 || lastOn == LINE_SENSOR_COUNT - 1)) {
     // ----- SHARP CORNER detection -----
-    // firstOn == 0 → extreme left → pivot left
-    // lastOn == 7 → extreme right → pivot right
     if (firstOn == 0) {
       pivotLeft();
     } else {
@@ -123,8 +134,7 @@ void loop() {
 // --- Sensors ---
 bool sensorOnLine(int index) {
   int raw = analogRead(sensorPins[index]);
-  // For your sensors: black < LINE_THRESHOLD
-  bool onLine = (raw < LINE_THRESHOLD);
+  bool onLine = (raw < LINE_THRESHOLD);  // black < threshold
   return onLine;
 }
 
@@ -168,7 +178,7 @@ void pivotLeft() {
 
 void pivotRight() {
   applyWheelSpeeds(PIVOT_SPEED, -PIVOT_SPEED);
-  delay(350);
+  delay(420);   // slightly longer right pivot
   stopMotors();
 }
 
