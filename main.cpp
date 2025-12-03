@@ -1,16 +1,13 @@
 #include <Arduino.h>
 
-// 1. SENSOR LOGIC (FLIPPED)
-// We set this to FALSE. Now Black (High Value) = Line.
-const bool BLACK_LINE_IS_LOW = false; 
+// ================================================================
+// ====================   RACE CONFIG   ===========================
+// ================================================================
 
-// 2. STEERING DIRECTION
-// We keep this TRUE because you said it was turning the wrong way.
-const bool INVERT_STEERING = true; 
-
-// 3. SPEED SETTINGS (HIGH POWER)
-const int BASE_SPEED = 230;   
-const int SEARCH_SPEED = 200; 
+// 1. SETTINGS
+const bool INVERT_STEERING = true; // Keep this TRUE as per your fix
+const int BASE_SPEED = 250;        // Fast Speed
+const int SEARCH_SPEED = 230;      // Fast Search
 
 // ================================================================
 
@@ -22,7 +19,7 @@ const int sensorPins[8] = {A0, A1, A2, A3, A4, A5, A6, A7};
 
 int minValues[8];
 int maxValues[8];
-int lastKnownDirection = 1; // 1 = Right, -1 = Left
+int lastKnownDirection = 1; 
 
 // ================= MOTOR CONTROL =================
 void setMotors(int left, int right) {
@@ -46,28 +43,7 @@ void setMotors(int left, int right) {
   }
 }
 
-// ================= CALIBRATION =================
-void calibrate() {
-  Serial.println("Calibrating... Scan the line!");
-  setMotors(200, -200); // Spin fast to calibrate
-  
-  for(int i=0; i<8; i++) {
-    minValues[i] = 1023;
-    maxValues[i] = 0;
-  }
-
-  for (int i = 0; i < 5000; i++) { 
-    for (int j = 0; j < 8; j++) {
-      int val = analogRead(sensorPins[j]);
-      if (val < minValues[j]) minValues[j] = val;
-      if (val > maxValues[j]) maxValues[j] = val;
-    }
-  }
-  setMotors(0, 0);
-  delay(1000);
-}
-
-// ================= SETUP =================
+// ================= SNAPSHOT CALIBRATION (NO SPIN) =================
 void setup() {
   Serial.begin(9600);
   pinMode(LEFT_FWD, OUTPUT);
@@ -75,8 +51,29 @@ void setup() {
   pinMode(RIGHT_FWD, OUTPUT);
   pinMode(RIGHT_BWD, OUTPUT);
   
-  delay(1000);
-  calibrate();
+  // --- INSTANT SNAPSHOT ---
+  // We assume the robot is CENTERED on the line.
+  // Sensors 3 and 4 are on Black. Sensors 0 and 7 are on White.
+  
+  delay(500); // 0.5s pause to let sensors stabilize
+  
+  int blackSample = (analogRead(A3) + analogRead(A4)) / 2;
+  int whiteSample = (analogRead(A0) + analogRead(A7)) / 2;
+  
+  // Safety Check: If contrast is too low (e.g., in air), use defaults
+  if ((blackSample - whiteSample) < 100) {
+     blackSample = 800;
+     whiteSample = 100;
+  }
+
+  // Set the values for all sensors based on this snapshot
+  for(int i=0; i<8; i++) {
+    minValues[i] = whiteSample - 50; // Add buffer
+    if (minValues[i] < 0) minValues[i] = 0;
+    
+    maxValues[i] = blackSample + 50; // Add buffer
+    if (maxValues[i] > 1023) maxValues[i] = 1023;
+  }
 }
 
 // ================= LOOP =================
@@ -85,55 +82,40 @@ void loop() {
   long sum = 0;
   int activeSensors = 0;
 
-  // 1. Read Sensors
   for(int i=0; i<8; i++) {
     int val = analogRead(sensorPins[i]);
     
-    // Normalize to 0-1000 range
+    // Map using the Snapshot values
     int calibratedVal = map(val, minValues[i], maxValues[i], 0, 1000);
-    
-    // IF BLACK IS HIGH (Standard): 0=White, 1000=Black
-    if (BLACK_LINE_IS_LOW) {
-       // Invert if your specific sensor logic requires it
-       calibratedVal = 1000 - calibratedVal;
-    }
-    
     calibratedVal = constrain(calibratedVal, 0, 1000);
 
-    // Filter noise: Only count if > 300 (Dark enough to be a line)
-    if(calibratedVal > 300) {
-        activeSensors++;
-    }
+    // Assuming Standard Sensors (Black = High)
+    // If your sensors are inverted (Black=Low), uncomment the line below:
+    // calibratedVal = 1000 - calibratedVal;
+
+    if(calibratedVal > 300) activeSensors++;
 
     weightedSum += (long)calibratedVal * (i * 1000);
     sum += calibratedVal;
   }
 
-  // 2. CHECK IF LOST (SEARCH MODE)
+  // LOST LINE LOGIC
   if (activeSensors == 0) {
-    // If we lost the line, spin in the direction we last saw it
-    if (lastKnownDirection == -1) {
-       setMotors(-SEARCH_SPEED, SEARCH_SPEED); // Spin Left
-    } else {
-       setMotors(SEARCH_SPEED, -SEARCH_SPEED); // Spin Right
-    }
+    if (lastKnownDirection == -1) setMotors(-SEARCH_SPEED, SEARCH_SPEED);
+    else setMotors(SEARCH_SPEED, -SEARCH_SPEED);
     return;
   }
 
-  // 3. CALCULATE POSITION & ERROR
-  int position = weightedSum / sum; // Center is 3500
+  // PID STEERING
+  int position = weightedSum / sum; 
   int error = position - 3500;
 
-  // Remember direction for when we get lost next time
-  if (error < -500) lastKnownDirection = -1; // Line is Left
-  else if (error > 500) lastKnownDirection = 1; // Line is Right
+  if (error < -500) lastKnownDirection = -1; 
+  else if (error > 500) lastKnownDirection = 1; 
 
-  // 4. STEERING
-  int turnAdjustment = error * 0.12; // Gain (Kp)
+  int turnAdjustment = error * 0.12; 
 
-  if (INVERT_STEERING) {
-    turnAdjustment = -turnAdjustment;
-  }
+  if (INVERT_STEERING) turnAdjustment = -turnAdjustment;
 
   int leftSpeed = BASE_SPEED + turnAdjustment;
   int rightSpeed = BASE_SPEED - turnAdjustment;
