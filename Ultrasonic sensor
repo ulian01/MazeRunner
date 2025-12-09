@@ -8,20 +8,20 @@
 #define TRIG 4
 #define SERVO_PIN 8
 
-const int FORWARD_SPEED = 150;
-const int TURN_SPEED = 170;
-const float WALL_DIST = 18.0;    // drempel waarop robot stopt en gaat scannen
-const float CLEAR_DIST = 30.0;   // minimaal vrije afstand om kant te kiezen
-const unsigned long TURN_90 = 350;
-const unsigned long BACK_TIME = 250;
-const unsigned long FORWARD_PASS = 600; // tijd vooruit na keuze richting
+const int FORWARD_SPEED = 150; //the speed it has going forwards
+const int TURN_SPEED = 170; //the speed it turns in
+const float WALL_DIST = 18.0;  //the distance which it considers a wall  
+const float CLEAR_DIST = 30.0;   // minimum distance to choose a direction
+const unsigned long TURN_90 = 350; // time to turn 90 degrees
+const unsigned long BACK_TIME = 250; // time to back off when obstacle detected
+const unsigned long FORWARD_PASS = 600; // time it drives forwards afater choosing a direction
 
 
 
-// Tijdens intelligente scan willen we neckScan pauzeren
+
 volatile bool scanningActive = false;
 
-// Vooruit/motor prototypes
+// functions for the motors and ultrasonic
 void stopMotors();
 void forwardMove();
 void backwardMove();
@@ -29,7 +29,7 @@ void turnLeft();
 void turnRight();
 float readDistance();
 
-
+//func
 void servoWrite(int angle) {
     if (angle < 0) angle = 0;
     if (angle > 180) angle = 180;
@@ -43,7 +43,7 @@ void servoWrite(int angle) {
 void neckScan() {
     // Nek kijkt altijd recht vooruit wanneer niet scannend
     if (!scanningActive) {
-        servoWrite(90);
+        servoWrite(70);
     }
 }
 
@@ -65,7 +65,7 @@ int findBestDirection() {
     leftDist = readDistance();
 
     // Terug naar midden
-    servoWrite(90);
+    servoWrite(70);
     delay(100);
 
     scanningActive = false;
