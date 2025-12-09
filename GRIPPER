@@ -1,0 +1,30 @@
+#include <Arduino.h>
+
+#define GRIPPER  13
+#define gripper_close  1000
+#define gripper_open 1700
+
+void setup() {
+  // put your setup code here, to run once:
+pinMode(GRIPPER, OUTPUT);
+digitalWrite(GRIPPER, 1);
+digitalWrite(GRIPPER, 0);
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  gripper(gripper_open);
+}
+void gripper(int pulse){
+static long last_pulse;
+static long timer;
+if (millis() > timer){
+if(pulse>0){
+  last_pulse = pulse;
+}
+digitalWrite(GRIPPER, 1);
+delayMicroseconds(last_pulse);
+digitalWrite(GRIPPER, 0);
+timer =millis()+20;
+}
+}
