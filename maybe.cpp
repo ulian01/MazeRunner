@@ -8,9 +8,9 @@ const int sensorPins[NUM_SENSORS] = { A0, A1, A2, A3, A4, A5, A6, A7 };
 int sensorValues[NUM_SENSORS];
 
 // ---------------- MOTOR PINS ----------------
-const int MOTOR_A_1 = 6;   // Left forward
-const int MOTOR_A_2 = 9;   // Left backward
-const int MOTOR_B_1 = 3;   // Right forward
+const int MOTOR_A_1 = 11;   // Left forward
+const int MOTOR_A_2 = 10;   // Left backward
+const int MOTOR_B_1 = 6;   // Right forward
 const int MOTOR_B_2 = 5;   // Right backward
 
 // --- PID control variables ---
