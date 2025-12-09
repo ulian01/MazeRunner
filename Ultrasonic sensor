@@ -1,1 +1,249 @@
+#include <Arduino.h>
+
+#define LEFT_BWD 9
+#define LEFT_FWD 6
+#define RIGHT_BWD 5
+#define RIGHT_FWD 3
+#define ECHO 12
+#define TRIG 4
+#define SERVO_PIN 8
+
+const int FORWARD_SPEED = 150;
+const int TURN_SPEED = 170;
+const float WALL_DIST = 18.0;    // drempel waarop robot stopt en gaat scannen
+const float CLEAR_DIST = 30.0;   // minimaal vrije afstand om kant te kiezen
+const unsigned long TURN_90 = 350;
+const unsigned long BACK_TIME = 250;
+const unsigned long FORWARD_PASS = 600; // tijd vooruit na keuze richting
+
+
+
+// Tijdens intelligente scan willen we neckScan pauzeren
+volatile bool scanningActive = false;
+
+// Vooruit/motor prototypes
+void stopMotors();
+void forwardMove();
+void backwardMove();
+void turnLeft();
+void turnRight();
+float readDistance();
+
+
+void servoWrite(int angle) {
+    if (angle < 0) angle = 0;
+    if (angle > 180) angle = 180;
+    int pulse = map(angle, 0, 180, 500, 2500);
+    digitalWrite(SERVO_PIN, HIGH);
+    delayMicroseconds(pulse);
+    digitalWrite(SERVO_PIN, LOW);
+    delayMicroseconds(20000 - pulse);
+}
+
+void neckScan() {
+    // Nek kijkt altijd recht vooruit wanneer niet scannend
+    if (!scanningActive) {
+        servoWrite(90);
+    }
+}
+
+
+int findBestDirection() {
+    scanningActive = true;
+
+    float leftDist = 0;
+    float rightDist = 0;
+
+    // Kijk rechts
+    servoWrite(30);
+    delay(200);
+    rightDist = readDistance();
+
+    // Kijk links
+    servoWrite(150);
+    delay(200);
+    leftDist = readDistance();
+
+    // Terug naar midden
+    servoWrite(90);
+    delay(100);
+
+    scanningActive = false;
+
+    bool canGoRight = rightDist > CLEAR_DIST;
+    bool canGoLeft  = leftDist > CLEAR_DIST;
+
+    if (canGoRight && canGoLeft) {
+        return (rightDist > leftDist) ? 30 : 150;
+    } else if (canGoRight) return 30;
+    else if (canGoLeft) return 150;
+    else return 0; // beide kanten dicht
+}
+
+
+void setup() {
+    pinMode(LEFT_FWD, OUTPUT);
+    pinMode(LEFT_BWD, OUTPUT);
+    pinMode(RIGHT_FWD, OUTPUT);
+    pinMode(RIGHT_BWD, OUTPUT);
+    pinMode(TRIG, OUTPUT);
+    pinMode(ECHO, INPUT);
+    pinMode(SERVO_PIN, OUTPUT);
+
+    Serial.begin(9600);
+    scanningActive = false;
+    servoWrite(90);
+
+    stopMotors();
+}
+
+
+void loop() {
+    neckScan();
+
+    float d = readDistance();
+    Serial.println(d);
+
+    // Alleen stoppen als muur dichtbij is
+    if (d > 0 && d < WALL_DIST) {
+        stopMotors();
+        delay(80);
+
+        // Kleine back-off
+        backwardMove();
+        delay(BACK_TIME);
+        stopMotors();
+        delay(80);
+
+        int bestAngle = findBestDirection();
+
+        if (bestAngle == 30) {
+            // Rechts
+            turnRight();
+            delay(350);
+            stopMotors();
+            delay(80);
+            forwardMove();
+            delay(400);
+
+        } else if (bestAngle == 150) {
+            // Links
+            turnLeft();
+            delay(350);
+            stopMotors();
+            delay(80);
+            forwardMove();
+            delay(400);
+
+        } else if (bestAngle == 0) {
+            // Beide kanten dicht
+            backwardMove();
+            delay(300);
+            stopMotors();
+            delay(80);
+
+            if (millis() % 2 == 0) turnRight();
+            else turnLeft();
+            delay(TURN_90);
+            stopMotors();
+            delay(120);
+        } else {
+            // Rechtdoor
+            forwardMove();
+            delay(400);
+        }
+
+        stopMotors();
+        delay(80);
+        return;
+    }
+
+    // Geen muur → gewoon vooruit
+    forwardMove();
+
+    // ---------- Stuck detectie ----------
+    static float lastDistance = 0;
+    static unsigned long lastCheck = 0;
+    static int stuckCounter = 0;
+
+    if (millis() - lastCheck > 120) {
+        lastCheck = millis();
+        float distNow = readDistance();
+
+        if (abs(distNow - lastDistance) < 1.5) stuckCounter++;
+        else stuckCounter = 0;
+
+        lastDistance = distNow;
+
+        if (stuckCounter > 6) {
+            stopMotors();
+            delay(80);
+
+            // Back-up
+            backwardMove();
+            delay(350);
+            stopMotors();
+            delay(80);
+
+            // Willekeurige draai
+            if (millis() % 2 == 0) turnRight();
+            else turnLeft();
+            delay(TURN_90);
+
+            stopMotors();
+            delay(120);
+            stuckCounter = 0;
+            return;
+        }
+    }
+}
+
+// ============================ MOTOR FUNCTIONS ==========================
+void forwardMove() {
+    analogWrite(LEFT_FWD, 147);
+    analogWrite(RIGHT_FWD, FORWARD_SPEED);
+    analogWrite(LEFT_BWD, 0);
+    analogWrite(RIGHT_BWD, 0);
+}
+
+void backwardMove() {
+    analogWrite(LEFT_BWD, 147);
+    analogWrite(RIGHT_BWD, 150);
+    analogWrite(LEFT_FWD, 0);
+    analogWrite(RIGHT_FWD, 0);
+}
+
+void stopMotors() {
+    analogWrite(LEFT_FWD, 0);
+    analogWrite(RIGHT_FWD, 0);
+    analogWrite(LEFT_BWD, 0);
+    analogWrite(RIGHT_BWD, 0);
+}
+
+void turnRight() {
+    analogWrite(LEFT_FWD, 167);
+    analogWrite(RIGHT_BWD, TURN_SPEED);
+    analogWrite(RIGHT_FWD, 0);
+    analogWrite(LEFT_BWD, 0);
+}
+
+void turnLeft() {
+    analogWrite(RIGHT_FWD, TURN_SPEED);
+    analogWrite(LEFT_BWD, 167);
+    analogWrite(LEFT_FWD, 0);
+    analogWrite(RIGHT_BWD, 0);
+}
+
+// ============================ ULTRASONIC ==================================
+float readDistance() {
+    digitalWrite(TRIG, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG, LOW);
+
+    long duration = pulseIn(ECHO, HIGH, 30000);
+    if (duration == 0) return 0;
+    return duration * 0.034 / 2.0;
+}
 
