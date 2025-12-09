@@ -8,9 +8,9 @@ const int sensorPins[NUM_SENSORS] = { A0, A1, A2, A3, A4, A5, A6, A7 };
 int sensorValues[NUM_SENSORS];
 
 // ---------------- MOTOR PINS ----------------
-const int MOTOR_A_1 = 6;   // Left forward
-const int MOTOR_A_2 = 9;   // Left backward
-const int MOTOR_B_1 = 3;   // Right forward
+const int MOTOR_A_1 = 11;   // Left forward
+const int MOTOR_A_2 = 10;   // Left backward
+const int MOTOR_B_1 = 6;   // Right forward
 const int MOTOR_B_2 = 5;   // Right backward
 
 // --- PID control variables ---
@@ -37,6 +37,7 @@ void followLine(int position);
 void moveForward(int _leftSpeed, int _rightSpeed);
 void stopMotors();
 bool allSensorsBlack();
+bool noLine();
 
 void setup() {
     Serial.begin(9600);
@@ -54,6 +55,13 @@ void setup() {
 
 void loop() {
     readSensors();
+
+    if(noLine() == true) {
+        stopMotors();
+        delay(200);
+        deadEnd(200, 200);
+        return;
+    }
 
     unsigned long now = millis();
     bool nowAllBlack = allSensorsBlack();
@@ -112,12 +120,28 @@ int calculateLinePosition() {
     return weightedSum / sum;
 }
 
+// Check if all white
+bool noLine() {
+    for (int i = 0; i < NUM_SENSORS; i++)
+        if (sensorValues[i] <= BLACK_THRESHOLD)
+            return false;
+    return true;
+}
+
+// dead end handling
+void deadEnd(int _leftSpeed, int _rightSpeed) {
+    analogWrite(MOTOR_A_1, 0);
+    analogWrite(MOTOR_A_2, _leftSpeed);
+
+    analogWrite(MOTOR_B_1, 0);
+    analogWrite(MOTOR_B_2, _rightSpeed);
+}
 // ------------ PID line following ------------
 void followLine(int position) {
 
     Kp = 1;
     Ki = 0.0002;
-    Kd = 1;
+    Kd = 0.6;
 
     int center = (NUM_SENSORS - 1) * 1000 / 2;
 
