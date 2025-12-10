@@ -9,7 +9,9 @@
 #define SERVO_PIN 8
 
 const int FORWARD_SPEED = 150; //the speed it has going forwards
+const int FORWARD_SPEED_WEAK = 155; //the speed it has going forwards when turning
 const int TURN_SPEED = 170; //the speed it turns in
+const int TURN_SPEED_WEAK = 175; //the speed it turns in when going forwards
 const float WALL_DIST = 18.0;  //the distance which it considers a wall  
 const float CLEAR_DIST = 30.0;   // minimum distance to choose a direction
 const unsigned long TURN_90 = 350; // time to turn 90 degrees
@@ -200,15 +202,15 @@ void loop() {
 
 // ============================ MOTOR FUNCTIONS ==========================
 void forwardMove() {
-    analogWrite(LEFT_FWD, 147);
+    analogWrite(LEFT_FWD, FORWARD_SPEED_WEAK);
     analogWrite(RIGHT_FWD, FORWARD_SPEED);
     analogWrite(LEFT_BWD, 0);
     analogWrite(RIGHT_BWD, 0);
 }
 
 void backwardMove() {
-    analogWrite(LEFT_BWD, 147);
-    analogWrite(RIGHT_BWD, 150);
+    analogWrite(LEFT_BWD, FORWARD_SPEED_WEAK);
+    analogWrite(RIGHT_BWD, FORWARD_SPEED);
     analogWrite(LEFT_FWD, 0);
     analogWrite(RIGHT_FWD, 0);
 }
@@ -221,7 +223,7 @@ void stopMotors() {
 }
 
 void turnRight() {
-    analogWrite(LEFT_FWD, 167);
+    analogWrite(LEFT_FWD, TURN_SPEED_WEAK);
     analogWrite(RIGHT_BWD, TURN_SPEED);
     analogWrite(RIGHT_FWD, 0);
     analogWrite(LEFT_BWD, 0);
@@ -229,7 +231,7 @@ void turnRight() {
 
 void turnLeft() {
     analogWrite(RIGHT_FWD, TURN_SPEED);
-    analogWrite(LEFT_BWD, 167);
+    analogWrite(LEFT_BWD, TURN_SPEED_WEAK);
     analogWrite(LEFT_FWD, 0);
     analogWrite(RIGHT_BWD, 0);
 }
@@ -246,4 +248,5 @@ float readDistance() {
     if (duration == 0) return 0;
     return duration * 0.034 / 2.0;
 }
+
 
