@@ -4,7 +4,7 @@
 // ---------------- LINE SENSORS ----------------
 #define NUM_SENSORS 8
 
-const int sensorPins[NUM_SENSORS] = { A0, A1, A2, A3, A4, A5, A6, A7 };
+const int sensorPins[NUM_SENSORS] = { A0, A1, A2, A3, A4, A5, A6, A7 }; //maybe broken sensor oriented to extremes
 int sensorValues[NUM_SENSORS];
 
 // ---------------- MOTOR PINS ----------------
@@ -38,6 +38,7 @@ void moveForward(int _leftSpeed, int _rightSpeed);
 void stopMotors();
 bool allSensorsBlack();
 bool noLine();
+void deadEnd(int _leftSpeed, int _rightSpeed);
 
 void setup() {
     Serial.begin(9600);
@@ -145,7 +146,7 @@ void followLine(int position) {
 
     int center = (NUM_SENSORS - 1) * 1000 / 2;
 
-    error = (position - center) / 2;
+    error = (center - position) / 2; //change position with center to adjust line position
     integral += error;
     derivative = error - lastError;
 
