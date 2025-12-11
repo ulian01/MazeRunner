@@ -77,7 +77,22 @@ void loop() {
   if (sensorsCalibrated && !gameStarted && conePickedUp) {
     turnLeftMillis(90);
     if(robotState != FOLLOW_LINE) return;
-    gameStarted = true;
+
+    // Ensure we have actually left the start/base square before declaring game started.
+    // Read sensors and only set `gameStarted` when not sitting on a T-junction/base.
+    getLinePosition();
+    if (!tJunctionOrBase) {
+      gameStarted = true;
+    } else {
+      // Try moving forward a short distance to exit the start square, then re-evaluate.
+      resetTicks();
+      moveForwardPID(180, 180, true, false); // straight movement using encoder PID
+      if (_leftTicks > 8 || _rightTicks > 8) {
+        stopMotors();
+        getLinePosition();
+        if (!tJunctionOrBase) gameStarted = true;
+      }
+    }
   }
 
   if (gameStarted && !gameEnded) {
@@ -158,4 +173,4 @@ void loop() {
   }
 
   updateNeoPixels();
-} //not working ignore
+} 
