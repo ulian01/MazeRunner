@@ -78,6 +78,18 @@ void loop() {
   }
 
   if (gameStarted && !gameEnded) {
+    // Handle active turns to prevent re-entering line logic
+    if (robotState == TURNING_LEFT) {
+      turnLeftMillis(90);
+      updateNeoPixels();
+      return;
+    }
+    if (robotState == TURNING_AROUND) {
+      turnAroundMillis();
+      updateNeoPixels();
+      return;
+    }
+
     getLinePosition();
     
     float dist = getDistance();
@@ -96,7 +108,55 @@ void loop() {
     
     switch (linePosition) {
       case T_JUNCTION:
-        turnLeftMillis(90);
+        // Drive forward 1/3 of a wheel rotation to check if it's the finish line
+        resetTicks();
+        {
+          int checkTicks = PULSE_PER_REVOLUTION / 3;
+          moveForward(150, 150);
+          while(_leftTicks < checkTicks && _rightTicks < checkTicks) {
+            // Wait for movement
+          }
+        }
+        stopMotors();
+        
+        readSensors();
+        
+        {
+          bool allBlack = true;
+          for (int i = 0; i < NUM_SENSORS; i++) {
+            if (sensorValues[i] < sensorThreshold[i]) {
+              allBlack = false;
+              break;
+            }
+          }
+          
+          if (allBlack) {
+            // Still all black -> Finish Line
+            coneDroppedOff = true;
+            gripper(GRIPPER_OPEN);
+            delay(500);
+            
+            // Reverse 30cm
+            resetTicks();
+            int targetTicks = 30; // Approx 30cm
+            
+            // Set motors to reverse
+            analogWrite(PIN_LEFT_BWD, 150);
+            digitalWrite(PIN_LEFT_FWD, LOW);
+            analogWrite(PIN_RIGHT_BWD, 150);
+            digitalWrite(PIN_RIGHT_FWD, LOW);
+            
+            while(abs(_leftTicks) < targetTicks && abs(_rightTicks) < targetTicks) {
+              delay(10);
+            }
+            
+            stopMotors();
+            gameEnded = true;
+          } else {
+            // Not all black -> Just a crossing
+            turnLeftMillis(90);
+          }
+        }
         break;
         
       case LEFT_LINE:

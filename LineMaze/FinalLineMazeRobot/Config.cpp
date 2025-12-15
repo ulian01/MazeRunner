@@ -8,7 +8,7 @@ const float DISTANCE_BETWEEN_WHEELS = 22.75; // Width between wheels in cm
 const int DISTANCE_FROM_BASE_TO_CONE = 33;   // Distance in encoder ticks
 
 const int GRIPPER_OPEN = 1750;               // Pulse width to open gripper (μs)
-const int GRIPPER_CLOSE = 1220;              // Pulse width to close gripper (μs)
+const int GRIPPER_CLOSE = 1000;              // Pulse width to close gripper (μs)
 const int pulse = 2000;                      // Default pulse width (μs)
 const int gripperInterval = 20;              // Time between servo updates (ms)
 const int ISR_INTERVAL = 20;                 // Interrupt throttling (ms)

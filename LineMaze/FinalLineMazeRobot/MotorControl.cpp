@@ -73,9 +73,9 @@ void resetTicks() {
 void moveForwardPID(int _leftSpeed, int _rightSpeed, bool withOutLine, bool lineTracking) {
   if (withOutLine) {
     // PID for straight movement using wheel encoders
-    Kp = 6.5;                     // Proportional gain (higher = stronger response)
-    Ki = 0.1;                     // Integral gain (accumulating error)
-    Kd = 5;                       // Derivative gain (change in error)
+    Kp = 4.5;                     // Proportional gain (reduced for less aggressive correction)
+    Ki = 0.05;                    // Integral gain (reduced to prevent accumulating error too quickly)
+    Kd = 2.5;                       // Derivative gain (reduced for smoother response)
 
     error = _leftTicks - _rightTicks;  // Difference between wheel movements
     integral += error;            // Accumulate error over time
@@ -143,6 +143,22 @@ void turnLeftMillis(int angle) {
   // Check if turn is complete
   if (robotState == TURNING_LEFT) {
     lastCheck = millis();
+    
+    // Check for line detection (stop early if line found)
+    // Only check after 50% of turn to avoid false positives from current line
+    if (_rightTicks > targetPulses / 2) {
+       int val3 = analogRead(sensorPins[3]);
+       int val4 = analogRead(sensorPins[4]);
+       if (val3 > sensorThreshold[3] || val4 > sensorThreshold[4]) {
+          stopMotors();
+          robotState = FOLLOW_LINE;
+          motionComplete = true;
+          linePosition = CENTER_LINE;
+          updateNeoPixels();
+          return;
+       }
+    }
+
     if (_rightTicks >= targetPulses) {    // Right wheel reached target
       stopMotors();                       // Stop turning
       robotState = FOLLOW_LINE;           // Back to line following
