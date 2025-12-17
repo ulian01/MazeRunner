@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Robot Hub</title>
+    <style>
+        body { background:#111; color:#0f0; font-family:monospace; padding:20px; }
+        table { border-collapse:collapse; width:100%; }
+        th, td { border:1px solid #0f0; padding:8px; }
+    </style>
+</head>
+<body>
+
+<h1>🤖 Robot Hub</h1>
+
+<table>
+<tr>
+    <th>Robot ID</th>
+    <th>Robot Name</th>
+    <th>Ping Count</th>
+</tr>
+
+{% for r in robots %}
+<tr>
+    <td>{{ r[0] }}</td>
+    <td>{{ r[1] }}</td>
+    <td>{{ r[2] }}</td>
+</tr>
+{% endfor %}
+
+</table>
+
+</body>
+</html>
