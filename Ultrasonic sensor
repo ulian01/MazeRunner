@@ -9,26 +9,27 @@
 #define SERVO_PIN  8
 
 const int FORWARD_SPEED       = 150;
-const int FORWARD_SPEED_WEAK  = 155;
+const int FORWARD_SPEED_WEAK  = 165;
 const int TURN_SPEED          = 170;
-const int TURN_SPEED_WEAK     = 175;
+const int TURN_SPEED_WEAK     = 185;
 const float WALL_DIST         = 10.0;
 const float CLEAR_DIST        = 30.0;
-const float EXIT_DIST         = 50.0; // Distance to consider an "exit"
-const unsigned long TURN_90_LEFT  = 525;
-const unsigned long TURN_90_RIGHT = 675;
-const unsigned long BACK_TIME = 500;
-const unsigned long FORWARD_PASS = 600;
+const unsigned long TURN_90_LEFT  = 575;
+const unsigned long TURN_90_RIGHT = 700;
+
+const unsigned long TIME_FOR_30CM = 2000; // INCREASED:  Check less often
+const unsigned long FORWARD_BEFORE_TURN = 700; // Drive forward before turning into opening
 
 volatile bool scanningActive = false;
-
-// Head State Machine
-int headState = 0; // 0=Center, 1=Right, 2=Left
+int headState = 0;
 unsigned long headStateStart = 0;
 float currentDistance = 0;
 bool isGlancing = false;
 
-// ---------------- MOTOR FUNCTIONS ----------------
+unsigned long segmentStartTime = 0;
+bool justTurned = false;
+bool drivingIntoOpening = false;
+
 void forwardMove();
 void backwardMove();
 void stopMotors();
@@ -38,8 +39,8 @@ float readDistance();
 float readDistanceFiltered();
 void startTurnLeft(unsigned long duration);
 void startTurnRight(unsigned long duration);
+void startForwardThenTurn(unsigned long forwardTime, unsigned long turnTime);
 
-// ---------------- SERVO ----------------
 void servoWrite(int angle) {
   angle = constrain(angle, 0, 180);
   int pulse = map(angle, 0, 180, 500, 2500);
@@ -49,7 +50,6 @@ void servoWrite(int angle) {
   delayMicroseconds(20000 - pulse);
 }
 
-// Helper to move servo and hold it for a duration (ensures it reaches position)
 void moveServo(int angle, unsigned long duration) {
   unsigned long start = millis();
   while (millis() - start < duration) {
@@ -57,56 +57,81 @@ void moveServo(int angle, unsigned long duration) {
   }
 }
 
-void neckScan() {
-  // Replaced by state machine in loop
+bool checkLeftOpening() {
+  moveServo(160, 400);
+  delay(100);
+  
+  float leftDist = readDistanceFiltered();
+  
+  moveServo(70, 200);
+  
+  Serial.print("Left check: ");
+  Serial.print(leftDist);
+  Serial.print("cm -> ");
+  
+  if (leftDist > CLEAR_DIST) {
+    Serial.println("OPENING!");
+    return true;
+  } else {
+    Serial.println("wall");
+    return false;
+  }
 }
 
 int findBestDirection() {
   scanningActive = true;
-  isGlancing = false; // Reset glance state
-  headState = 0;      // Reset head to center
+  isGlancing = false;
+  headState = 0;
 
   float leftDist = 0, rightDist = 0;
 
-  // Move to Right and hold to ensure it gets there
-  moveServo(10, 300);
+  moveServo(10, 250);
+  delay(30);
   rightDist = readDistanceFiltered();
 
-  // Move to Left
-  moveServo(130, 300);
+  moveServo(130, 250);
+  delay(30);
   leftDist = readDistanceFiltered();
 
-  // Back to Center
-  moveServo(70, 150);
+  moveServo(70, 120);
 
   scanningActive = false;
 
   bool canGoRight = rightDist > CLEAR_DIST;
   bool canGoLeft  = leftDist > CLEAR_DIST;
 
+  Serial.print("Scan L:");
+  Serial.print(leftDist);
+  Serial.print("cm R:");
+  Serial.print(rightDist);
+  Serial.print("cm -> ");
+
   if (canGoRight && canGoLeft) {
+    Serial.println(rightDist > leftDist ?  "RIGHT" : "LEFT");
     return (rightDist > leftDist) ? 10 : 130;
   } else if (canGoRight) {
+    Serial.println("RIGHT");
     return 10;
   } else if (canGoLeft) {
+    Serial.println("LEFT");
     return 130;
   } else {
+    Serial.println("UTURN");
     return 0;
   }
 }
 
-// ---------------- STATE MACHINE ----------------
-enum RobotState { MOVING_FORWARD, TURNING_LEFT, TURNING_RIGHT, BACKING_UP };
+enum RobotState { MOVING_FORWARD, TURNING_LEFT, TURNING_RIGHT, BACKING_UP, ENTERING_OPENING };
 RobotState currentState = MOVING_FORWARD;
 unsigned long actionStartTime = 0;
 unsigned long actionDuration  = 0;
 
-// ---------------- NON-BLOCKING ACTION START ----------------
 void startTurnLeft(unsigned long duration) {
   turnLeft();
   currentState = TURNING_LEFT;
   actionStartTime = millis();
   actionDuration = duration;
+  justTurned = true;
 }
 
 void startTurnRight(unsigned long duration) {
@@ -114,6 +139,7 @@ void startTurnRight(unsigned long duration) {
   currentState = TURNING_RIGHT;
   actionStartTime = millis();
   actionDuration = duration;
+  justTurned = true;
 }
 
 void startBackward(unsigned long duration) {
@@ -123,7 +149,14 @@ void startBackward(unsigned long duration) {
   actionDuration = duration;
 }
 
-// ---------------- SETUP ----------------
+void startEnteringOpening() {
+  forwardMove();
+  currentState = ENTERING_OPENING;
+  actionStartTime = millis();
+  actionDuration = FORWARD_BEFORE_TURN;
+  Serial.println("-> Driving into opening");
+}
+
 void setup() {
   pinMode(LEFT_FWD, OUTPUT);
   pinMode(LEFT_BWD, OUTPUT);
@@ -134,49 +167,91 @@ void setup() {
   pinMode(SERVO_PIN, OUTPUT);
 
   Serial.begin(9600);
+  delay(50);
+  Serial.println("ROBOT_READY");
+  
   servoWrite(70);
   stopMotors();
+  
+  segmentStartTime = millis();
 }
 
 void checkStuck(unsigned long now);
 
-// ---------------- LOOP ----------------
 void loop() {
   unsigned long now = millis();
 
   if (currentState == MOVING_FORWARD) {
-      servoWrite(70); // Keep head centered
+      servoWrite(70);
       currentDistance = readDistanceFiltered();
       
-      // If we see a wall in front, STOP immediately
       if (currentDistance > 0 && currentDistance < WALL_DIST) {
          stopMotors();
-         // Handle Wall Logic
+         
+         Serial.print("WALL@");
+         Serial.print(currentDistance);
+         Serial.println("cm");
+         
          int bestAngle = findBestDirection();
          if (bestAngle == 10) {
             startTurnRight(TURN_90_RIGHT);
          } else if (bestAngle == 130) {
             startTurnLeft(TURN_90_LEFT);
          } else {
-            // 3 walls (Dead End) -> Turn 180 degrees
             startTurnRight(TURN_90_RIGHT * 2);
          }
-         return; // Restart loop
+         
+         segmentStartTime = millis();
+         return;
       }
+      
+      // LEFT-HAND RULE: Check left every TIME_FOR_30CM
+      if (! justTurned && (now - segmentStartTime) > TIME_FOR_30CM) {
+        Serial.println("=== 30cm check ===");
+        
+        stopMotors();
+        delay(100);
+        
+        if (checkLeftOpening()) {
+          startEnteringOpening();
+          return; // IMPORTANT: Exit loop to start entering
+        } else {
+          Serial.println("-> Continue forward");
+        }
+        
+        segmentStartTime = now;
+      }
+      
+  } else if (currentState == ENTERING_OPENING) {
+    servoWrite(70);
+    // Check if done driving forward
+    if (now - actionStartTime >= actionDuration) {
+      Serial.println("-> Now turning LEFT");
+      startTurnLeft(TURN_90_LEFT);
+      return;
+    }
+    // Keep driving forward
+    forwardMove();
+    return;
+    
   } else {
-    // If turning/backing, just keep head centered
     servoWrite(70);
   }
 
-  // Check if current action finished
-  if (currentState != MOVING_FORWARD && now - actionStartTime >= actionDuration) {
+  // Check if current action finished (for turns and backup)
+  if (currentState != MOVING_FORWARD && currentState != ENTERING_OPENING && now - actionStartTime >= actionDuration) {
     stopMotors();
     currentState = MOVING_FORWARD;
+    segmentStartTime = millis();
+    
+    if (justTurned) {
+      justTurned = false;
+      Serial.println("Turn complete");
+    }
   }
 
   checkStuck(now);
 
-  // Keep moving forward if nothing else
   if (currentState == MOVING_FORWARD) forwardMove();
 }
 
@@ -187,10 +262,8 @@ void checkStuck(unsigned long now) {
 
   if (currentState == MOVING_FORWARD && (now - lastCheck > 120)) {
     lastCheck = now;
-    float distNow = readDistance(); // Single read is enough for stuck check
+    float distNow = readDistance();
     
-    // Only count as stuck if we have a valid reading that isn't changing
-    // Ignore 0 (too far) to prevent false positives in open spaces
     if (distNow > 0 && distNow < 200 && abs(distNow - lastDistance) < 1.5) {
       stuckCounter++;
     } else {
@@ -199,20 +272,20 @@ void checkStuck(unsigned long now) {
     lastDistance = distNow;
 
     if (stuckCounter > 6) {
+      Serial.println("STUCK!");
       stopMotors();
-      startBackward(800); // More aggressive backup
-      // Random turn to get unstuck
+      startBackward(800);
       if (millis() % 2 == 0) {
         startTurnRight(TURN_90_RIGHT + 200);
       } else {
         startTurnLeft(TURN_90_LEFT + 200);
       }
       stuckCounter = 0;
+      segmentStartTime = millis();
     }
   }
 }
 
-// ---------------- MOTOR IMPLEMENTATION ----------------
 void forwardMove() {
   analogWrite(LEFT_FWD, FORWARD_SPEED_WEAK);
   analogWrite(RIGHT_FWD, FORWARD_SPEED);
@@ -248,7 +321,6 @@ void turnLeft() {
   analogWrite(RIGHT_BWD, 0);
 }
 
-// ---------------- ULTRASONIC ----------------
 float readDistance() {
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
@@ -256,7 +328,6 @@ float readDistance() {
   delayMicroseconds(10);
   digitalWrite(TRIG, LOW);
 
-  // Reduced timeout to ~18ms (approx 3 meters) to speed up loop
   long duration = pulseIn(ECHO, HIGH, 18000); 
   if (duration == 0) return 0;
   return duration * 0.034 / 2.0;
@@ -264,12 +335,11 @@ float readDistance() {
 
 float readDistanceFiltered() {
   float d1 = readDistance();
-  delay(3);
+  delay(2);
   float d2 = readDistance();
-  delay(3);
+  delay(2);
   float d3 = readDistance();
 
-  // Median filter to remove noise spikes
   if ((d1 <= d2 && d2 <= d3) || (d3 <= d2 && d2 <= d1)) return d2;
   if ((d2 <= d1 && d1 <= d3) || (d3 <= d1 && d1 <= d2)) return d1;
   return d3;
