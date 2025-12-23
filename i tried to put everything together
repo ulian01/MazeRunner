@@ -1,0 +1,458 @@
+#include <Arduino.h>
+
+#define LEFT_BWD   9
+#define LEFT_FWD   6
+#define RIGHT_BWD  5
+#define RIGHT_FWD  3
+#define ECHO       12
+#define TRIG       4
+#define SERVO_PIN  8
+#define GRIPPER    13
+
+// Line sensors
+#define NUM_SENSORS 8
+#define BLACK_THRESHOLD 500
+
+const int FORWARD_SPEED       = 150;
+const int FORWARD_SPEED_WEAK  = 165;
+const int TURN_SPEED          = 170;
+const int TURN_SPEED_WEAK     = 185;
+const float WALL_DIST         = 10.0;
+const float CLEAR_DIST        = 30.0;
+const unsigned long TURN_90_LEFT  = 575;
+const unsigned long TURN_90_RIGHT = 700;
+
+const unsigned long TIME_FOR_30CM = 2000;
+const unsigned long FORWARD_BEFORE_TURN = 700;
+
+// Gripper servo pulse values
+#define gripper_close  1000
+#define gripper_open   1500
+
+// Line sensor pins
+int sensorPins[NUM_SENSORS] = {
+    A7, A6, A5, A4, A3, A2, A1, A0
+};
+int sensorValues[NUM_SENSORS];
+
+// Startup phase tracking
+int startPhase = 0;
+unsigned long phaseStartTime = 0;
+bool startupComplete = false;
+
+volatile bool scanningActive = false;
+int headState = 0;
+unsigned long headStateStart = 0;
+float currentDistance = 0;
+bool isGlancing = false;
+
+unsigned long segmentStartTime = 0;
+bool justTurned = false;
+bool drivingIntoOpening = false;
+
+void forwardMove();
+void backwardMove();
+void stopMotors();
+void turnLeft();
+void turnRight();
+float readDistance();
+float readDistanceFiltered();
+void startTurnLeft(unsigned long duration);
+void startTurnRight(unsigned long duration);
+void startForwardThenTurn(unsigned long forwardTime, unsigned long turnTime);
+
+void servoWrite(int angle) {
+  angle = constrain(angle, 0, 180);
+  int pulse = map(angle, 0, 180, 500, 2500);
+  digitalWrite(SERVO_PIN, HIGH);
+  delayMicroseconds(pulse);
+  digitalWrite(SERVO_PIN, LOW);
+  delayMicroseconds(20000 - pulse);
+}
+
+void gripperWrite(int pulse) {
+  static long last_pulse;
+  static long timer;
+  
+  if (millis() > timer) {
+    if (last_pulse != pulse) {
+      last_pulse = pulse;
+    }
+    digitalWrite(GRIPPER, 1);
+    delayMicroseconds(last_pulse);
+    digitalWrite(GRIPPER, 0);
+    timer = millis() + 50;
+  }
+}
+
+void readlineSensors(){
+  static int lastSensorValues[NUM_SENSORS];
+  static long timer;
+
+  if (millis() > timer){
+    for (int i = 0; i < NUM_SENSORS; i++){
+      int currentValue = analogRead(sensorPins[i]);
+      // Update stored value if it changed
+      if (lastSensorValues[i] != currentValue){
+        lastSensorValues[i] = currentValue;
+      }
+      // Store into global array
+      sensorValues[i] = lastSensorValues[i];
+    }
+    // Refresh every 50 ms
+    timer = millis() + 150;
+  }
+}
+
+void moveServo(int angle, unsigned long duration) {
+  unsigned long start = millis();
+  while (millis() - start < duration) {
+    servoWrite(angle);
+  }
+}
+
+bool checkLeftOpening() {
+  moveServo(160, 400);
+  delay(100);
+  
+  float leftDist = readDistanceFiltered();
+  
+  moveServo(70, 200);
+  
+  Serial.print("Left check: ");
+  Serial.print(leftDist);
+  Serial.print("cm -> ");
+  
+  if (leftDist > CLEAR_DIST) {
+    Serial.println("OPENING!");
+    return true;
+  } else {
+    Serial.println("wall");
+    return false;
+  }
+}
+
+int findBestDirection() {
+  scanningActive = true;
+  isGlancing = false;
+  headState = 0;
+
+  float leftDist = 0, rightDist = 0;
+
+  moveServo(10, 250);
+  delay(30);
+  rightDist = readDistanceFiltered();
+
+  moveServo(130, 250);
+  delay(30);
+  leftDist = readDistanceFiltered();
+
+  moveServo(70, 120);
+
+  scanningActive = false;
+
+  bool canGoRight = rightDist > CLEAR_DIST;
+  bool canGoLeft  = leftDist > CLEAR_DIST;
+
+  Serial.print("Scan L:");
+  Serial.print(leftDist);
+  Serial.print("cm R:");
+  Serial.print(rightDist);
+  Serial.print("cm -> ");
+
+  if (canGoRight && canGoLeft) {
+    Serial.println(rightDist > leftDist ?  "RIGHT" : "LEFT");
+    return (rightDist > leftDist) ? 10 : 130;
+  } else if (canGoRight) {
+    Serial.println("RIGHT");
+    return 10;
+  } else if (canGoLeft) {
+    Serial.println("LEFT");
+    return 130;
+  } else {
+    Serial.println("UTURN");
+    return 0;
+  }
+}
+
+enum RobotState { MOVING_FORWARD, TURNING_LEFT, TURNING_RIGHT, BACKING_UP, ENTERING_OPENING };
+RobotState currentState = MOVING_FORWARD;
+unsigned long actionStartTime = 0;
+unsigned long actionDuration  = 0;
+
+void startTurnLeft(unsigned long duration) {
+  turnLeft();
+  currentState = TURNING_LEFT;
+  actionStartTime = millis();
+  actionDuration = duration;
+  justTurned = true;
+}
+
+void startTurnRight(unsigned long duration) {
+  turnRight();
+  currentState = TURNING_RIGHT;
+  actionStartTime = millis();
+  actionDuration = duration;
+  justTurned = true;
+}
+
+void startBackward(unsigned long duration) {
+  backwardMove();
+  currentState = BACKING_UP;
+  actionStartTime = millis();
+  actionDuration = duration;
+}
+
+void startEnteringOpening() {
+  forwardMove();
+  currentState = ENTERING_OPENING;
+  actionStartTime = millis();
+  actionDuration = FORWARD_BEFORE_TURN;
+  Serial.println("-> Driving into opening");
+}
+
+void setup() {
+  pinMode(LEFT_FWD, OUTPUT);
+  pinMode(LEFT_BWD, OUTPUT);
+  pinMode(RIGHT_FWD, OUTPUT);
+  pinMode(RIGHT_BWD, OUTPUT);
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  pinMode(SERVO_PIN, OUTPUT);
+  pinMode(GRIPPER, OUTPUT);
+
+  Serial.begin(9600);
+  delay(50);
+  Serial.println("ROBOT_READY");
+  
+  servoWrite(70);
+  gripperWrite(gripper_open);
+  stopMotors();
+  
+  segmentStartTime = millis();
+  phaseStartTime = millis();
+}
+
+void checkStuck(unsigned long now);
+
+void loop() {
+  unsigned long now = millis();
+
+  // ============ STARTUP SEQUENCE ============
+  if (!startupComplete) {
+    if (startPhase == 0) {
+      // Phase 0: Move forward for 1 second
+      forwardMove();
+      if (now - phaseStartTime >= 1000) {
+        stopMotors();
+        Serial.println("Phase 0: Forward 1s complete");
+        startPhase = 1;
+        phaseStartTime = now;
+      }
+      return;
+    } 
+    else if (startPhase == 1) {
+      // Phase 1: Stop and close gripper
+      stopMotors();
+      gripperWrite(gripper_close);
+      if (now - phaseStartTime >= 300) {
+        Serial.println("Phase 1: Gripper closed");
+        startPhase = 2;
+        phaseStartTime = now;
+      }
+      return;
+    }
+    else if (startPhase == 2) {
+      // Phase 2: Turn left for 500ms
+      turnLeft();
+      if (now - phaseStartTime >= 500) {
+        stopMotors();
+        Serial.println("Phase 2: Turned left");
+        startupComplete = true;
+        segmentStartTime = now;
+        return;
+      }
+      return;
+    }
+  }
+
+  // ============ WALL-FOLLOWING LOGIC ============
+  if (currentState == MOVING_FORWARD) {
+      servoWrite(70);
+      currentDistance = readDistanceFiltered();
+      
+      // Read line sensors and check if all sensors are on black
+      readlineSensors();
+      bool allBlack = true;
+      for (int i = 0; i < NUM_SENSORS; i++) {
+        if (sensorValues[i] >= BLACK_THRESHOLD) {
+          allBlack = false;
+          break;
+        }
+      }
+      
+      // If all sensors detect black, open the gripper
+      if (allBlack) {
+        Serial.println("ALL SENSORS BLACK - OPENING GRIPPER!");
+        stopMotors();
+        gripperWrite(gripper_open);
+        delay(500);
+      }
+      
+      if (currentDistance > 0 && currentDistance < WALL_DIST) {
+         stopMotors();
+         
+         Serial.print("WALL@");
+         Serial.print(currentDistance);
+         Serial.println("cm");
+         
+         int bestAngle = findBestDirection();
+         if (bestAngle == 10) {
+            startTurnRight(TURN_90_RIGHT);
+         } else if (bestAngle == 130) {
+            startTurnLeft(TURN_90_LEFT);
+         } else {
+            startTurnRight(TURN_90_RIGHT * 2);
+         }
+         
+         segmentStartTime = millis();
+         return;
+      }
+      
+      // LEFT-HAND RULE: Check left every TIME_FOR_30CM
+      if (! justTurned && (now - segmentStartTime) > TIME_FOR_30CM) {
+        Serial.println("=== 30cm check ===");
+        
+        stopMotors();
+        delay(100);
+        
+        if (checkLeftOpening()) {
+          startEnteringOpening();
+          return;
+        } else {
+          Serial.println("-> Continue forward");
+        }
+        
+        segmentStartTime = now;
+      }
+      
+  } else if (currentState == ENTERING_OPENING) {
+    servoWrite(70);
+    if (now - actionStartTime >= actionDuration) {
+      Serial.println("-> Now turning LEFT");
+      startTurnLeft(TURN_90_LEFT);
+      return;
+    }
+    forwardMove();
+    return;
+    
+  } else {
+    servoWrite(70);
+  }
+
+  // Check if current action finished (for turns and backup)
+  if (currentState != MOVING_FORWARD && currentState != ENTERING_OPENING && now - actionStartTime >= actionDuration) {
+    stopMotors();
+    currentState = MOVING_FORWARD;
+    segmentStartTime = millis();
+    
+    if (justTurned) {
+      justTurned = false;
+      Serial.println("Turn complete");
+    }
+  }
+
+  checkStuck(now);
+
+  if (currentState == MOVING_FORWARD) forwardMove();
+}
+
+void checkStuck(unsigned long now) {
+  static float lastDistance = 0;
+  static unsigned long lastCheck = 0;
+  static int stuckCounter = 0;
+
+  if (currentState == MOVING_FORWARD && (now - lastCheck > 120)) {
+    lastCheck = now;
+    float distNow = readDistance();
+    
+    if (distNow > 0 && distNow < 200 && abs(distNow - lastDistance) < 1.5) {
+      stuckCounter++;
+    } else {
+      stuckCounter = 0;
+    }
+    lastDistance = distNow;
+
+    if (stuckCounter > 6) {
+      Serial.println("STUCK!");
+      stopMotors();
+      startBackward(800);
+      if (millis() % 2 == 0) {
+        startTurnRight(TURN_90_RIGHT + 200);
+      } else {
+        startTurnLeft(TURN_90_LEFT + 200);
+      }
+      stuckCounter = 0;
+      segmentStartTime = millis();
+    }
+  }
+}
+
+void forwardMove() {
+  analogWrite(LEFT_FWD, FORWARD_SPEED_WEAK);
+  analogWrite(RIGHT_FWD, FORWARD_SPEED);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void backwardMove() {
+  analogWrite(LEFT_BWD, FORWARD_SPEED_WEAK);
+  analogWrite(RIGHT_BWD, FORWARD_SPEED);
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+}
+
+void stopMotors() {
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void turnRight() {
+  analogWrite(LEFT_FWD, TURN_SPEED_WEAK);
+  analogWrite(RIGHT_BWD, TURN_SPEED);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+}
+
+void turnLeft() {
+  analogWrite(RIGHT_FWD, TURN_SPEED);
+  analogWrite(LEFT_BWD, TURN_SPEED_WEAK);
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+float readDistance() {
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+
+  long duration = pulseIn(ECHO, HIGH, 18000); 
+  if (duration == 0) return 0;
+  return duration * 0.034 / 2.0;
+}
+
+float readDistanceFiltered() {
+  float d1 = readDistance();
+  delay(2);
+  float d2 = readDistance();
+  delay(2);
+  float d3 = readDistance();
+
+  if ((d1 <= d2 && d2 <= d3) || (d3 <= d2 && d2 <= d1)) return d2;
+  if ((d2 <= d1 && d1 <= d3) || (d3 <= d1 && d1 <= d2)) return d1;
+  return d3;
+}
