@@ -1,0 +1,148 @@
+#include <Arduino.h>
+// pin definitions for motors
+#define LEFT_BWD 9
+#define LEFT_FWD 6
+#define RIGHT_BWD 5
+#define RIGHT_FWD 3
+// rotation sensoer pins
+#define rotationSensorLeft 11
+#define rotationSensorRight 10
+// ---------------- LINE SENSORS ----------------
+#define NUM_SENSORS 8                        // We have 8 line sensors in total
+//gripper initialization
+#define GRIPPER  13
+#define gripper_close  1000
+#define gripper_open 1500
+const int START_LEFT_SPEED = 200;
+const int START_RIGHT_SPEED = 200;
+const int STLS = 150;
+const int STRS = 155;
+const int BLACK_THRESHOLD = 500;             // Example: <500 = black, >500 = white
+int sensorPins[NUM_SENSORS] = {              // Which Arduino pin each sensor is connected to
+    A7, A6, A5, A4, A3, A2, A1, A0               // D1=A0 , D2=A1 , D3=A2 , D4=A3 , D5=A4 , D6=A5 , D7=A6 , D8=A7
+};
+int sensorValues[NUM_SENSORS];           // Latest analog value from each sensor
+void setup() {
+  // put your setup code here, to run once:
+pinMode(GRIPPER, OUTPUT);
+digitalWrite(GRIPPER, 1);
+digitalWrite(GRIPPER, 0);
+
+pinMode(LEFT_BWD, OUTPUT);
+pinMode(LEFT_FWD, OUTPUT);  
+pinMode(RIGHT_BWD, OUTPUT);
+pinMode(RIGHT_FWD, OUTPUT);
+
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  
+  // Phase 1: Move forward for 1 second
+  static long phaseStartTime = millis();
+  static int phase = 0;
+  
+  if (phase == 0) {
+    // Move forward for 1 second
+    moveForward();
+    if (millis() - phaseStartTime >= 1000) {
+      stopMotors();
+      phase = 1;
+      phaseStartTime = millis();
+    }
+  } 
+  else if (phase == 1) {
+    // Stop and close gripper
+    stopMotors();
+    gripper(gripper_close);
+    delay(100);
+    phase = 2;
+    phaseStartTime = millis();
+  }
+  else if (phase == 2) {
+    // Turn left for a moment to align with the line
+    turnLeft();
+    delay(500);
+    phase = 3;
+  }
+  else if (phase == 3) {
+    // Follow the black line
+    readlineSensors();
+    
+    // Check if on black line and follow it
+    if ((sensorValues[0] < BLACK_THRESHOLD) && (sensorValues[7] < BLACK_THRESHOLD)) {
+      // Both outer sensors on black - moving straight
+      moveForward();
+    }
+    else if (sensorValues[0] < BLACK_THRESHOLD) {
+      // Left sensor on black - turn left
+      turnLeft();
+    }
+    else if (sensorValues[7] < BLACK_THRESHOLD) {
+      // Right sensor on black - turn right
+      // (Add turn right function if needed)
+      moveForward();
+    }
+    else {
+      // Lost the line - try to find it
+      moveForward();
+    }
+  }
+
+}
+void readlineSensors(){
+  static int lastSensorValues[NUM_SENSORS];
+  static long timer;
+
+  if (millis() > timer){
+    for (int i = 0; i < NUM_SENSORS; i++){
+      int currentValue = analogRead(sensorPins[i]);
+      // Update stored value if it changed
+      if (lastSensorValues[i] != currentValue){
+        lastSensorValues[i] = currentValue;
+      }
+      // Store into global array
+      sensorValues[i] = lastSensorValues[i];
+    }
+    // Refresh every 50 ms
+    timer = millis() + 150;
+  }
+}
+
+// ------------ Turn left in place (non-blocking) ------------
+void turnLeft(){
+  int speed = 200;
+  analogWrite(LEFT_FWD, 0);       // Left motor backward
+  analogWrite(LEFT_BWD, STLS);
+  analogWrite(RIGHT_FWD, STRS);   // Right motor forward
+  analogWrite(RIGHT_BWD, 0);
+}
+// ------------ Stop both motors ------------
+void stopMotors(){
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+// ------------ Move forward with given speeds ------------
+void moveForward(){
+  analogWrite(LEFT_FWD, START_LEFT_SPEED);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_FWD, START_RIGHT_SPEED);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+// ------------ Send servo pulse for gripper control ------------
+void gripper(int pulse){
+static long last_pulse;
+static long timer;
+if (millis() > timer){
+  if (last_pulse != pulse){
+    last_pulse = pulse;
+  }
+digitalWrite(GRIPPER, 1);
+delayMicroseconds(last_pulse);
+digitalWrite(GRIPPER, 0);
+timer =millis()+50;
+}
+}
