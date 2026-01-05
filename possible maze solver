@@ -1,0 +1,310 @@
+#include <Arduino.h>
+
+#define LEFT_BWD   9
+#define LEFT_FWD   6
+#define RIGHT_BWD  5
+#define RIGHT_FWD  3
+#define ECHO       12
+#define TRIG       4
+#define SERVO_PIN  8
+
+const int FORWARD_SPEED       = 150;
+const int FORWARD_SPEED_WEAK  = 165;
+const int TURN_SPEED          = 170;
+const int TURN_SPEED_WEAK     = 185;
+const float WALL_DIST         = 10.0;
+const float CLEAR_DIST        = 30.0;
+const unsigned long TURN_90_LEFT  = 525;
+const unsigned long TURN_90_RIGHT = 650;
+const unsigned long TURN_180      = 1200;
+
+const unsigned long TIME_FOR_30CM = 2000;
+const unsigned long FORWARD_BEFORE_TURN = 700;
+
+volatile bool scanningActive = false;
+int headState = 0;
+unsigned long headStateStart = 0;
+float currentDistance = 0;
+bool isGlancing = false;
+
+unsigned long segmentStartTime = 0;
+bool justTurned = false;
+bool drivingIntoOpening = false;
+
+// Stuck detection
+unsigned long lastStuckCheck = 0;
+float lastStuckDist = 0;
+int stuckCounter = 0;
+
+#define MAX_PATH 200
+char path[MAX_PATH];
+int pathIndex = 0;
+
+enum RobotState { MOVING_FORWARD, TURNING_LEFT, TURNING_RIGHT, BACKING_UP, ENTERING_OPENING };
+RobotState currentState = MOVING_FORWARD;
+unsigned long actionStartTime = 0;
+unsigned long actionDuration  = 0;
+
+// servo stuff
+void servoWrite(int angle) {
+  angle = constrain(angle, 0, 180);
+  int pulse = map(angle, 0, 180, 500, 2500);
+  digitalWrite(SERVO_PIN, HIGH);
+  delayMicroseconds(pulse);
+  digitalWrite(SERVO_PIN, LOW);
+  delayMicroseconds(20000 - pulse);
+}
+
+void moveServo(int angle, unsigned long duration) {
+  unsigned long start = millis();
+  while (millis() - start < duration) {
+    servoWrite(angle);
+  }
+}
+
+// ultrosonic sensor stuff
+float readDistance() {
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+
+  long duration = pulseIn(ECHO, HIGH, 18000); 
+  if (duration == 0) return 0;
+  return duration * 0.034 / 2.0;
+}
+
+float readDistanceFiltered() {
+  float d1 = readDistance();
+  delay(2);
+  float d2 = readDistance();
+  delay(2);
+  float d3 = readDistance();
+
+  if ((d1 <= d2 && d2 <= d3) || (d3 <= d2 && d2 <= d1)) return d2;
+  if ((d2 <= d1 && d1 <= d3) || (d3 <= d1 && d1 <= d2)) return d1;
+  return d3;
+}
+
+// fucntions 
+void forwardMove() {
+  analogWrite(LEFT_FWD, FORWARD_SPEED_WEAK);
+  analogWrite(RIGHT_FWD, FORWARD_SPEED);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void backwardMove() {
+  analogWrite(LEFT_BWD, FORWARD_SPEED_WEAK);
+  analogWrite(RIGHT_BWD, FORWARD_SPEED);
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+}
+
+void stopMotors() {
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void turnRight() {
+  analogWrite(LEFT_FWD, TURN_SPEED_WEAK);
+  analogWrite(RIGHT_BWD, TURN_SPEED);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+}
+
+void turnLeft() {
+  analogWrite(RIGHT_FWD, TURN_SPEED);
+  analogWrite(LEFT_BWD, TURN_SPEED_WEAK);
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+
+int findBestDirection() {
+  scanningActive = true;
+  isGlancing = false;
+  headState = 0;
+
+  float leftDist = 0, rightDist = 0;
+
+  //looks right
+  moveServo(10, 300);
+  delay(60);
+  rightDist = readDistanceFiltered();
+
+  //looks left
+  moveServo(130, 300);
+  delay(60);
+  leftDist = readDistanceFiltered();
+
+  // back to center
+  moveServo(70, 200);
+  scanningActive = false;
+
+  //checks which one has more space
+  bool rightBlocked = (rightDist < CLEAR_DIST);
+  bool leftBlocked  = (leftDist < CLEAR_DIST);
+
+  if (!rightBlocked && !leftBlocked) {
+    //for if both sides are free
+    return (rightDist > leftDist) ? 10 : 130;
+  } else if (!rightBlocked) {
+    return 10;
+  } else if (!leftBlocked) {
+    return 130;
+  } else {
+    return 0; //when it returns 0 it needs to turn 180 degrees
+  }
+}
+
+//turning left and saving its as an L
+void startTurnLeft(unsigned long duration) {
+  turnLeft();
+  currentState = TURNING_LEFT;
+  actionStartTime = millis();
+  actionDuration = duration;
+  justTurned = true;
+  path[pathIndex++] = 'L';
+}
+
+void startTurnRight(unsigned long duration) {
+  turnRight();
+  currentState = TURNING_RIGHT;
+  actionStartTime = millis();
+  actionDuration = duration;
+  justTurned = true;
+  path[pathIndex++] = 'R';
+}
+
+void startBackward(unsigned long duration) {
+  backwardMove();
+  currentState = BACKING_UP;
+  actionStartTime = millis();
+  actionDuration = duration;
+  path[pathIndex++] = 'B';
+}
+
+void startEnteringOpening() {
+  forwardMove();
+  currentState = ENTERING_OPENING;
+  actionStartTime = millis();
+  actionDuration = FORWARD_BEFORE_TURN;
+  path[pathIndex++] = 'F';
+}
+
+//backtracking the path it has made
+void backtrack() {
+  if (pathIndex > 0) {
+    char lastMove = path[--pathIndex];
+    Serial.print("Backtracking, undoing: ");
+    Serial.println(lastMove);
+
+    if (lastMove == 'L') {
+      startTurnRight(TURN_90_RIGHT);
+    } else if (lastMove == 'R') {
+      startTurnLeft(TURN_90_LEFT);
+    } else if (lastMove == 'F') {
+      startBackward(800);
+    } else if (lastMove == 'B') {
+      forwardMove();
+    }
+  }
+}
+
+
+void setup() {
+  pinMode(LEFT_FWD, OUTPUT);
+  pinMode(LEFT_BWD, OUTPUT);
+  pinMode(RIGHT_FWD, OUTPUT);
+  pinMode(RIGHT_BWD, OUTPUT);
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  pinMode(SERVO_PIN, OUTPUT);
+
+  Serial.begin(9600);
+  delay(50);
+  Serial.println("ROBOT_READY");
+  
+  servoWrite(70);
+  stopMotors();
+  segmentStartTime = millis();
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  if (currentState == MOVING_FORWARD) {
+    servoWrite(70);
+    currentDistance = readDistanceFiltered();
+      
+    if (currentDistance > 0 && currentDistance < WALL_DIST) {
+      stopMotors();
+      
+      // back up a bit to make room 
+      backwardMove();
+      delay(150);
+      stopMotors();
+
+      int bestAngle = findBestDirection();
+      if (bestAngle == 10) {
+        startTurnRight(TURN_90_RIGHT);
+      } else if (bestAngle == 130) {
+        startTurnLeft(TURN_90_LEFT);
+      } else {
+        //no way out
+        startTurnLeft(TURN_180);
+      }
+      segmentStartTime = millis();
+      stuckCounter = 0; // Reset stuck counter
+      return;
+    }
+
+    // Stuck detection logic
+    if (now - lastStuckCheck > 400) { 
+      float distDiff = abs(lastStuckDist - currentDistance);
+      // If we have moved less than 3cm in 400ms, and we see a wall within 150cm
+      if (currentDistance < 150 && distDiff < 3.0) {
+        stuckCounter++;
+      } else {
+        stuckCounter = 0;
+      }
+      lastStuckDist = currentDistance;
+      lastStuckCheck = now;
+
+      if (stuckCounter >= 3) {
+        //when stuck
+        stopMotors();
+        backwardMove();
+        delay(400); 
+        stopMotors();
+        
+        //trying to find an exit
+        int bestAngle = findBestDirection();
+        if (bestAngle == 10) {
+          startTurnRight(TURN_90_RIGHT);
+        } else if (bestAngle == 130) {
+          startTurnLeft(TURN_90_LEFT);
+        } else {
+          startTurnLeft(TURN_180);
+        }
+        stuckCounter = 0;
+        segmentStartTime = millis();
+        return;
+      }
+    }
+
+    forwardMove();
+  }
+
+  // finishing actions
+  if (currentState != MOVING_FORWARD && currentState != ENTERING_OPENING && now - actionStartTime >= actionDuration) {
+    stopMotors();
+    currentState = MOVING_FORWARD;
+    segmentStartTime = millis();
+    justTurned = false;
+  }
+}
