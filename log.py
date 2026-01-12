@@ -1,6 +1,6 @@
 import sqlite3, time, serial
 
-PORT = "/dev/tty.usbmodemXXXX"  # change to port
+PORT = "/dev/tty.usbmodemF0F5BD50E6942"  # change to port
 ser = serial.Serial(PORT,9600,timeout=1) # port = hub port, 9600 serial.begin freq, timeout 1 = wait 1 sec untill continuing
 db = sqlite3.connect("connectivity.db") # open database
 
