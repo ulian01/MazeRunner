@@ -18,7 +18,7 @@ const unsigned long checkInterval = 100;     // Object detection interval (ms)
 const unsigned long flashInterval = 100;     // LED blink rate (ms)
 
 const int MAX_DISTANCE = 50;                 // Maximum ultrasonic range (cm)
-const int OBSTACLE_THRESHOLD = 17;           // Distance to count as obstacle (cm)
+const int OBSTACLE_THRESHOLD = 15;           // Distance to count as obstacle (cm)
 
 const int MAX_DISTANCE_TO_CHECK = 30;        // Max robot detection range (cm)
 const int MIN_DISTANCE_TO_CHECK = 5;         // Min robot detection range (cm)
@@ -43,7 +43,7 @@ bool deadEnd = false;
 volatile signed int _leftTicks = 8;          // Left wheel encoder count
 volatile signed int _rightTicks = 0;         // Right wheel encoder count
 
-int baseSpeed = 180;                         // Normal movement speed (0-255)
+int baseSpeed = 255;                         // Normal movement speed (0-255)
 
 int previousTime = 0;                        // Last timestamp
 bool otherRobotDetected = false;             

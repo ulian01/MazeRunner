@@ -132,7 +132,7 @@ void turnLeftMillis(int angle) {
     stopMotors();
     
     // Start turning - right wheel forward, left stopped
-    analogWrite(PIN_RIGHT_FWD, 200);      // Right wheel forward
+    analogWrite(PIN_RIGHT_FWD, 220);      // Right wheel forward
     digitalWrite(PIN_LEFT_FWD, LOW);      // Left wheel stopped
     
     robotState = TURNING_LEFT;            // Update state
@@ -188,7 +188,7 @@ void turnRightMillis(int angle) {
     
     // Start turning - left wheel forward, right stopped
     digitalWrite(PIN_RIGHT_FWD, LOW);     // Right wheel stopped
-    analogWrite(PIN_LEFT_FWD, 90);        // Left wheel forward (slower)
+    analogWrite(PIN_LEFT_FWD, 220);        // Left wheel forward (slower)
     
     robotState = TURNING_RIGHT;           // Update state
     motionComplete = false;               // Mark motion in progress
@@ -221,7 +221,7 @@ void turnAroundMillis() {
     float turnDistance = (3.14 * (DISTANCE_BETWEEN_WHEELS / 2));  // Half-circle distance
     targetPulses = (turnDistance / WHEEL_CIRCUMFERENCE) * PULSE_PER_REVOLUTION;  // Convert to ticks
     
-    turn180(200, 200);                    // Start turning with both wheels
+    turn180(220, 220);                    // Start turning with both wheels
     robotState = TURNING_AROUND;          // Update state
     motionComplete = false;               // Mark motion in progress
     updateNeoPixels();                    // Update lights

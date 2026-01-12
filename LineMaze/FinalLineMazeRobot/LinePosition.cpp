@@ -7,15 +7,14 @@
 void getLinePosition() {
   readSensors();  // Get fresh readings
   
-  // Left turn: Left sensors (4-7) detect line, right sensors (0-2) do not
+  // Left turn: Left sensors (5-7) detect line, right sensors (0-1) do not
+  // Relaxed condition to detect turns earlier
   leftTurn = 
-    sensorValues[4] > sensorThreshold[4] && 
     sensorValues[5] > sensorThreshold[5] && 
     sensorValues[6] > sensorThreshold[6] && 
     sensorValues[7] > sensorThreshold[7] && 
     sensorValues[0] < sensorThreshold[0] && 
-    sensorValues[1] < sensorThreshold[1] && 
-    sensorValues[2] < sensorThreshold[2];
+    sensorValues[1] < sensorThreshold[1];
   
   // Right turn: Right sensors (0-2) detect line, left sensors (5-7) do not
   rightTurn = 

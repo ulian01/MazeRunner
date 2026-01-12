@@ -55,7 +55,8 @@ void calibrateSensors() {
   }
 
   // Keep moving forward to collect more calibration data
-  moveForwardPID(200, 200, true, false);  // Move with encoder feedback, no line tracking
+  // Adjusted right motor speed significantly to correct initial leftward drift
+  moveForwardPID(210, 140, true, false);  // Move with encoder feedback, no line tracking
 }
 
 // Calculate weighted position of line under sensors

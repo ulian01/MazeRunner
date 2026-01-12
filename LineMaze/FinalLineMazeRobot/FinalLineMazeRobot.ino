@@ -100,8 +100,31 @@ void loop() {
         Serial.print("Obstacle at: ");
         Serial.print(dist);
         Serial.println(" cm - Turning to avoid");
+        
         stopMotors();
-        turn180(140, 170);
+        delay(100);
+        resetTicks();
+        
+        // Calculate ticks for 180 degree tank turn
+        // Arc length = (Pi * Diameter) / 2
+        float turnDist = (3.14 * DISTANCE_BETWEEN_WHEELS) / 2.0;
+        int targetTicks = (turnDist / WHEEL_CIRCUMFERENCE) * PULSE_PER_REVOLUTION;
+        
+        // Start tank turn (spin in place)
+        analogWrite(PIN_LEFT_FWD, 220);     // Left Forward
+        digitalWrite(PIN_LEFT_BWD, LOW);
+        
+        digitalWrite(PIN_RIGHT_FWD, LOW);
+        analogWrite(PIN_RIGHT_BWD, 220);    // Right Backward
+        
+        // Block until turn is complete using encoder ticks
+        while(abs(_leftTicks) < targetTicks) {
+          // Wait for turn to complete
+        }
+        
+        stopMotors();
+        robotState = FOLLOW_LINE;
+        linePosition = CENTER_LINE; 
         return;
       }
     }
@@ -136,14 +159,14 @@ void loop() {
             gripper(GRIPPER_OPEN);
             delay(500);
             
-            // Reverse 30cm
+            // Reverse 45cm
             resetTicks();
-            int targetTicks = 30; // Approx 30cm
+            int targetTicks = 45; // Approx 45cm
             
-            // Set motors to reverse
-            analogWrite(PIN_LEFT_BWD, 150);
+            // Set motors to reverse (increased power)
+            analogWrite(PIN_LEFT_BWD, 200);
             digitalWrite(PIN_LEFT_FWD, LOW);
-            analogWrite(PIN_RIGHT_BWD, 150);
+            analogWrite(PIN_RIGHT_BWD, 200);
             digitalWrite(PIN_RIGHT_FWD, LOW);
             
             while(abs(_leftTicks) < targetTicks && abs(_rightTicks) < targetTicks) {
@@ -154,13 +177,13 @@ void loop() {
             gameEnded = true;
           } else {
             // Not all black -> Just a crossing
-            turnLeftMillis(90);
+            turnLeftMillis(120);
           }
         }
         break;
         
       case LEFT_LINE:
-        turnLeftMillis(90);
+        turnLeftMillis(140);
         readSensors();
         {
           bool lineDetected = false;
