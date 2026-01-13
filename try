@@ -1,0 +1,617 @@
+#include <Arduino.h>
+#include <Servo.h>
+#include <Adafruit_NeoPixel.h>
+
+#define LEFT_BWD   9
+#define LEFT_FWD   6
+#define RIGHT_BWD  5
+#define RIGHT_FWD  3
+#define ROTATTION_SENSOR_PIN 10
+#define ROTATTION_SENSOR_PIN_2 11
+
+// HC-12 wireless module pins (on Nano hardware serial pins 0/1)
+#define HC12_RX 0
+#define HC12_TX 1 
+
+#define NEOPIXEL_IN 2
+#define LEFT_NEOPIXELS 2
+#define RIGHT_NEOPIXELS 2
+
+//----------------servo neck and ultrasonic sensor pins
+#define ECHO       12
+#define TRIG       4
+#define SERVO_PIN  8
+
+//----------------line sensor pins
+#define NUM_SENSORS 8
+
+//----------------gripper pins
+#define GRIPPER      13
+#define GRIPPER_OPEN  1500
+#define GRIPPER_CLOSE 1050
+
+//----------------start essentials
+const int START_LEFT_SPEED = 205;
+const int START_RIGHT_SPEED = 200;
+const int START_TURN_LEFT_SPEED = 150;
+const int START_TURN_RIGHT_SPEED = 155;
+
+//----------------line sensor threshold
+const int BLACK_THRESHOLD = 500;
+int sensorPins[NUM_SENSORS] = { A7, A6, A5, A4, A3, A2, A1, A0 };
+int sensorValues[NUM_SENSORS];
+
+//----------------motor speed and distance constants
+const int FORWARD_SPEED       = 160;
+const int FORWARD_SPEED_WEAK  = 165;
+const int TURN_SPEED          = 180;
+const int TURN_SPEED_WEAK     = 185;
+const float WALL_DIST         = 6.0;
+const float CLEAR_DIST        = 15.0;
+const unsigned long TURN_90_LEFT  = 525;
+const unsigned long TURN_90_RIGHT = 650;
+const unsigned long TURN_180      = 1200;
+
+const unsigned long TIME_FOR_30CM = 2000;
+const unsigned long FORWARD_BEFORE_TURN = 700;
+
+//----------------FUNCTION AND VARIABLE DECLARATIONS
+void forwardMove();
+void backwardMove();
+void stopMotors();
+void turnRight();
+void turnLeft();
+int findBestDirection();
+void startTurnLeft(unsigned long duration);
+void startTurnRight(unsigned long duration);
+void startBackward(unsigned long duration);
+void startEnteringOpening();
+void backtrack();
+void readlineSensors();
+void startturnLeft();
+void startmoveForward();
+void gripper(int pulse);
+void servoInit();
+void servoWrite(int angle);
+float readDistance();
+float readDistanceFiltered();
+void moveServo(int angle, unsigned long duration);
+
+// neopixel helpers
+void neoInit();
+void neoLeft();
+void neoRight();
+void neoStraight();
+void neoStop();
+
+// ---------- NEW: START SIGNAL WAIT HELPERS ----------
+bool raceStarted = false;
+
+static bool isStartForR3(const String &s) {
+  // Accept both plain and addressed signals (depends on how you send it)
+  return s.equalsIgnoreCase("START") ||
+         s.equalsIgnoreCase("START_R3") ||
+         s.equalsIgnoreCase("R3:START") ||
+         s.equalsIgnoreCase("R3:START_R3");
+}
+
+// servo and ultrasonic variables
+volatile bool scanningActive = false;
+int headState = 0;
+unsigned long headStateStart = 0;
+float currentDistance = 0;
+bool isGlancing = false;
+
+unsigned long segmentStartTime = 0;
+bool justTurned = false;
+bool drivingIntoOpening = false;
+
+// Stuck detection
+unsigned long lastStuckCheck = 0;
+float lastStuckDist = 0;
+int stuckCounter = 0;
+
+#define MAX_PATH 200
+char path[MAX_PATH];
+int pathIndex = 0;
+
+enum RobotState { MOVING_FORWARD, TURNING_LEFT, TURNING_RIGHT, BACKING_UP, ENTERING_OPENING };
+RobotState currentState = MOVING_FORWARD;
+unsigned long actionStartTime = 0;
+unsigned long actionDuration  = 0;
+
+// NeoPixel strip (all pixels daisy-chained on NEOPIXEL_IN)
+const uint8_t TOTAL_PIXELS = LEFT_NEOPIXELS + RIGHT_NEOPIXELS;
+const uint8_t LEFT_START   = 0;
+const uint8_t RIGHT_START  = LEFT_NEOPIXELS;
+Adafruit_NeoPixel strip(TOTAL_PIXELS, NEOPIXEL_IN, NEO_GRB + NEO_KHZ800);
+
+void setup() {
+  pinMode(LEFT_FWD, OUTPUT);
+  pinMode(LEFT_BWD, OUTPUT);
+  pinMode(RIGHT_FWD, OUTPUT);
+  pinMode(RIGHT_BWD, OUTPUT);
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  pinMode(GRIPPER, OUTPUT);
+  digitalWrite(GRIPPER, 1); 
+  digitalWrite(GRIPPER, 0);
+
+  // Initialize servo
+  servoInit();
+
+  // Initialize NeoPixels
+  neoInit();
+
+  // Initialize Serial for HC-12 communication
+  Serial.begin(9600);
+  delay(100);
+
+  // ---------- NEW: WAIT FOR REMOTE START COMMAND ----------
+  neoStop(); // red while waiting
+  stopMotors();
+  Serial.println("R3 Robot Online");
+  Serial.println("R3 Waiting for start signal...");
+
+  unsigned long lastHeartbeat = 0;
+  while (!raceStarted) {
+    unsigned long now = millis();
+
+    // heartbeat print every 2s so you know it is alive
+    if (now - lastHeartbeat >= 2000) {
+      Serial.println("R3 Waiting for start signal...");
+      lastHeartbeat = now;
+    }
+
+    // read command from hub/laptop (expects newline '\n')
+    if (Serial.available() > 0) {
+      String income = Serial.readStringUntil('\n');
+      income.trim();
+
+      // Debug: show exactly what arrived
+      Serial.print("R3 RX: ");
+      Serial.println(income);
+
+      if (isStartForR3(income)) {
+        raceStarted = true;
+        Serial.println("R3 Start Signal Received!");
+        Serial.println("R3 I started the race");
+      }
+    }
+  }
+  // ---------- END WAIT ----------
+
+  // Your original start setup
+  servoWrite(70);
+  stopMotors();
+  segmentStartTime = millis();
+
+  // Send multiple pulses to ensure gripper opens
+  for (int i = 0; i < 50; i++) {
+    digitalWrite(GRIPPER, HIGH);
+    delayMicroseconds(GRIPPER_OPEN);
+    digitalWrite(GRIPPER, LOW);
+    delay(20);
+  }
+}
+
+void loop() {
+  static long phaseStartTime = millis();
+  static int phase = 0;
+  static bool wallDetected = false;
+  static unsigned long allBlackStartTime = 0;
+  static bool allBlackDetected = false;
+  static const char* lastDirection = "IDLE";
+
+  // ==================== PHASE 0: Move forward ====================
+  if (phase == 0) {
+    lastDirection = "FORWARD";
+    startmoveForward();
+    if (millis() - phaseStartTime >= 1100) {
+      stopMotors();
+      phase = 1;
+      phaseStartTime = millis();
+    }
+  }
+
+  // ==================== PHASE 1: Stop and close gripper ====================
+  else if (phase == 1) {
+    lastDirection = "STOPPED";
+    stopMotors();
+    gripper(GRIPPER_CLOSE);
+    if (millis() - phaseStartTime >= 500) {
+      phase = 2;
+      phaseStartTime = millis();
+    }
+  }
+
+  // ==================== PHASE 2: Move forward ====================
+  else if (phase == 2) {
+    lastDirection = "FORWARD";
+    gripper(GRIPPER_CLOSE);
+    startmoveForward();
+    if (millis() - phaseStartTime >= 300) {
+      stopMotors();
+      phase = 3;
+      phaseStartTime = millis();
+    }
+  }
+
+  // ==================== PHASE 3: Turn left ====================
+  else if (phase == 3) {
+    lastDirection = "TURN_LEFT";
+    gripper(GRIPPER_CLOSE);
+    startturnLeft();
+    if (millis() - phaseStartTime >= 1000) {
+      stopMotors();
+      phase = 4;
+      phaseStartTime = millis();
+      wallDetected = false;
+    }
+  }
+
+  // ==================== PHASE 4: Maze solving with ultrasonic sensor ====================
+  else if (phase == 4) {
+    readlineSensors();
+
+    bool allBlack = true;
+    for (int i = 0; i < NUM_SENSORS; i++) {
+      if (sensorValues[i] >= BLACK_THRESHOLD) {
+        allBlack = false;
+        break;
+      }
+    }
+
+    if (allBlack) {
+      if (!allBlackDetected) {
+        allBlackStartTime = millis();
+        allBlackDetected = true;
+      } else if (millis() - allBlackStartTime >= 500) {
+        stopMotors();
+        gripper(GRIPPER_OPEN);
+        phase = 5;
+        Serial.println("R3 Race Finished"); // helpful for relay detection
+        return;
+      }
+    } else {
+      allBlackDetected = false;
+    }
+
+    servoWrite(70);
+    currentDistance = readDistanceFiltered();
+
+    gripper(GRIPPER_CLOSE);
+
+    if (currentDistance > 0 && currentDistance < 15.0) {
+      stopMotors();
+      wallDetected = true;
+
+      moveServo(10, 300);
+      delay(300);
+      float rightDistance = readDistanceFiltered();
+
+      if (rightDistance > 0 && rightDistance > 20.0) {
+        moveServo(70, 200);
+        turnRight();
+        delay(500);
+        stopMotors();
+        wallDetected = false;
+      }
+      else {
+        moveServo(130, 300);
+        delay(300);
+        float leftDistance = readDistanceFiltered();
+
+        if (leftDistance > 0 && leftDistance > 20.0) {
+          moveServo(70, 200);
+          turnLeft();
+          delay(500);
+          stopMotors();
+          wallDetected = false;
+        }
+        else {
+          moveServo(70, 200);
+          backwardMove();
+          delay(400);
+          stopMotors();
+          delay(100);
+          turnRight();
+          delay(1300);
+          stopMotors();
+          wallDetected = false;
+        }
+      }
+    }
+    else if (!wallDetected) {
+      servoWrite(70);
+      forwardMove();
+
+      if (millis() - lastStuckCheck > 1000) {
+        float distChange = abs(currentDistance - lastStuckDist);
+
+        if (distChange < 2.0 && currentDistance > 0 && currentDistance < 50.0) {
+          stuckCounter++;
+
+          if (stuckCounter >= 2) {
+            stopMotors();
+            delay(100);
+            backwardMove();
+            delay(500);
+            stopMotors();
+            delay(100);
+            turnRight();
+            delay(400);
+            stopMotors();
+            stuckCounter = 0;
+          }
+        } else {
+          stuckCounter = 0;
+        }
+
+        lastStuckDist = currentDistance;
+        lastStuckCheck = millis();
+      }
+    }
+  }
+
+  // ==================== PHASE 5: End - gripper open ====================
+  else if (phase == 5) {
+    stopMotors();
+    gripper(GRIPPER_OPEN);
+  }
+}
+
+// servo stuff - using Servo library for proper PWM
+Servo neckServo;
+
+void servoInit() {
+  neckServo.attach(SERVO_PIN);
+  neckServo.write(70);
+}
+
+void servoWrite(int angle) {
+  angle = constrain(angle, 0, 180);
+  neckServo.write(angle);
+}
+
+void moveServo(int angle, unsigned long duration) {
+  unsigned long start = millis();
+  while (millis() - start < duration) {
+    servoWrite(angle);
+    delayMicroseconds(100);
+  }
+}
+
+// ultrasonic sensor
+float readDistance() {
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+
+  long duration = pulseIn(ECHO, HIGH, 30000);
+  if (duration == 0) return 0;
+  return duration * 0.0343 / 2.0;
+}
+
+float readDistanceFiltered() {
+  float d1 = readDistance();
+  delay(2);
+  float d2 = readDistance();
+  delay(2);
+  float d3 = readDistance();
+
+  if ((d1 <= d2 && d2 <= d3) || (d3 <= d2 && d2 <= d1)) return d2;
+  if ((d2 <= d1 && d1 <= d3) || (d3 <= d1 && d1 <= d2)) return d1;
+  return d3;
+}
+
+// NeoPixel helpers
+static void setStripColor(uint8_t startIdx, uint8_t count, uint8_t r, uint8_t g, uint8_t b) {
+  for (uint16_t i = startIdx; i < startIdx + count && i < strip.numPixels(); i++) {
+    strip.setPixelColor(i, strip.Color(r, g, b));
+  }
+}
+
+static void showStop() {
+  setStripColor(0, TOTAL_PIXELS, 255, 0, 0);
+  strip.show();
+}
+
+void neoInit() {
+  strip.begin();
+  strip.setBrightness(60);
+  showStop();
+}
+
+void neoLeft() {
+  setStripColor(LEFT_START, LEFT_NEOPIXELS, 0, 255, 0);
+  setStripColor(RIGHT_START, RIGHT_NEOPIXELS, 255, 255, 255);
+  strip.show();
+}
+
+void neoRight() {
+  setStripColor(RIGHT_START, RIGHT_NEOPIXELS, 0, 255, 0);
+  setStripColor(LEFT_START, LEFT_NEOPIXELS, 255, 255, 255);
+  strip.show();
+}
+
+void neoStraight() {
+  setStripColor(0, TOTAL_PIXELS, 255, 255, 255);
+  strip.show();
+}
+
+void neoStop() {
+  showStop();
+}
+
+// functions
+void forwardMove() {
+  neoStraight();
+  analogWrite(LEFT_FWD, FORWARD_SPEED_WEAK);
+  analogWrite(RIGHT_FWD, FORWARD_SPEED);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void backwardMove() {
+  analogWrite(LEFT_BWD, FORWARD_SPEED_WEAK);
+  analogWrite(RIGHT_BWD, FORWARD_SPEED);
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+}
+
+void stopMotors() {
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+  neoStop();
+}
+
+void turnRight() {
+  neoRight();
+  analogWrite(LEFT_FWD, TURN_SPEED_WEAK);
+  analogWrite(RIGHT_BWD, TURN_SPEED);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+}
+
+void turnLeft() {
+  neoLeft();
+  analogWrite(RIGHT_FWD, TURN_SPEED);
+  analogWrite(LEFT_BWD, TURN_SPEED_WEAK);
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+int findBestDirection() {
+  scanningActive = true;
+  isGlancing = false;
+  headState = 0;
+
+  float leftDist = 0, rightDist = 0;
+
+  moveServo(10, 300);
+  delay(60);
+  rightDist = readDistanceFiltered();
+
+  moveServo(130, 300);
+  delay(60);
+  leftDist = readDistanceFiltered();
+
+  moveServo(70, 200);
+  scanningActive = false;
+
+  bool rightBlocked = (rightDist < CLEAR_DIST);
+  bool leftBlocked  = (leftDist < CLEAR_DIST);
+
+  if (!rightBlocked && !leftBlocked) {
+    return (rightDist > leftDist) ? 10 : 130;
+  } else if (!rightBlocked) {
+    return 10;
+  } else if (!leftBlocked) {
+    return 130;
+  } else {
+    return 0;
+  }
+}
+
+void startTurnLeft(unsigned long duration) {
+  turnLeft();
+  currentState = TURNING_LEFT;
+  actionStartTime = millis();
+  actionDuration = duration;
+  justTurned = true;
+  path[pathIndex++] = 'L';
+}
+
+void startTurnRight(unsigned long duration) {
+  turnRight();
+  currentState = TURNING_RIGHT;
+  actionStartTime = millis();
+  actionDuration = duration;
+  justTurned = true;
+  path[pathIndex++] = 'R';
+}
+
+void startBackward(unsigned long duration) {
+  backwardMove();
+  currentState = BACKING_UP;
+  actionStartTime = millis();
+  actionDuration = duration;
+  path[pathIndex++] = 'B';
+}
+
+void startEnteringOpening() {
+  forwardMove();
+  currentState = ENTERING_OPENING;
+  actionStartTime = millis();
+  actionDuration = FORWARD_BEFORE_TURN;
+  path[pathIndex++] = 'F';
+}
+
+void backtrack() {
+  if (pathIndex > 0) {
+    char lastMove = path[--pathIndex];
+    Serial.print("Backtracking, undoing: ");
+    Serial.println(lastMove);
+
+    if (lastMove == 'L') {
+      startTurnRight(TURN_90_RIGHT);
+    } else if (lastMove == 'R') {
+      startTurnLeft(TURN_90_LEFT);
+    } else if (lastMove == 'F') {
+      startBackward(800);
+    } else if (lastMove == 'B') {
+      forwardMove();
+    }
+  }
+}
+
+void startturnLeft() {
+  neoLeft();
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(LEFT_BWD, START_TURN_LEFT_SPEED);
+  analogWrite(RIGHT_FWD, START_TURN_RIGHT_SPEED);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void startmoveForward() {
+  neoStraight();
+  analogWrite(LEFT_FWD, START_LEFT_SPEED);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_FWD, START_RIGHT_SPEED);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void readlineSensors() {
+  static int lastSensorValues[NUM_SENSORS];
+  static unsigned long timer;
+
+  if (millis() > timer) {
+    for (int i = 0; i < NUM_SENSORS; i++) {
+      int currentValue = analogRead(sensorPins[i]);
+      if (lastSensorValues[i] != currentValue) {
+        lastSensorValues[i] = currentValue;
+      }
+      sensorValues[i] = lastSensorValues[i];
+    }
+    timer = millis() + 150;
+  }
+}
+
+void gripper(int pulse) {
+  static long last_pulse;
+  static unsigned long timer;
+  if (millis() - timer > 100) {
+    if (last_pulse != pulse) {
+      last_pulse = pulse;
+    }
+    digitalWrite(GRIPPER, 1);
+    delayMicroseconds(last_pulse);
+    digitalWrite(GRIPPER, 0);
+    timer = millis() + 50;
+  }
+}
