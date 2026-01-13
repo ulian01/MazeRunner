@@ -18,11 +18,21 @@ void setup() {
   // Attach Interrupts for Encoders
   attachInterrupt(digitalPinToInterrupt(MOTOR_R1), leftEncoderISR, CHANGE);
   attachInterrupt(digitalPinToInterrupt(MOTOR_R2), rightEncoderISR, CHANGE);
+
+  Serial.println("R2 Robot Online");
 }
 
 void loop() {
   while(!otherRobotDetected){
     unsigned long currentTime = millis();
+    
+    // Heartbeat for web connectivity check (every 2 seconds)
+    static unsigned long lastHeartbeat = 0;
+    if (currentTime - lastHeartbeat >= 2000) {
+      Serial.println("R2 Waiting for start signal..."); 
+      lastHeartbeat = currentTime;
+    }
+
     if (currentTime - lastCheckTime >= checkInterval) {
       lastCheckTime = currentTime;
       
@@ -38,7 +48,7 @@ void loop() {
         if (readingCount >= NUM_READINGS) {
           Serial.println("*** OTHER ROBOT CONFIRMED! ***");
           delay(3000);
-          Serial.println("Starting Race in 3 seconds...");
+          Serial.println("R2 I started the race");
           otherRobotDetected = true;
         }
       } else {
@@ -89,6 +99,14 @@ void loop() {
       updateNeoPixels();
       return;
     }
+    
+    // Status Report: Motor Speed
+    static unsigned long lastSpeedReport = 0;
+    if (millis() - lastSpeedReport > 1000) {
+       Serial.print("R2 Motor Speed: ");
+       Serial.println(baseSpeed); 
+       lastSpeedReport = millis();
+    }
 
     getLinePosition();
     
@@ -96,10 +114,9 @@ void loop() {
     
     if (dist != -1) {  
       if (dist < OBSTACLE_THRESHOLD) {
-        Serial.println("*** OBSTACLE DETECTED! ***");
-        Serial.print("Obstacle at: ");
-        Serial.print(dist);
-        Serial.println(" cm - Turning to avoid");
+        Serial.println("R2 OBJECT FOUND!!!");
+        Serial.print("R2 Distance: ");
+        Serial.println(dist);
         
         stopMotors();
         delay(100);
@@ -155,6 +172,7 @@ void loop() {
           
           if (allBlack) {
             // Still all black -> Finish Line
+            Serial.println("R2 Dropping Cone");
             coneDroppedOff = true;
             gripper(GRIPPER_OPEN);
             delay(500);
@@ -174,15 +192,18 @@ void loop() {
             }
             
             stopMotors();
+            Serial.println("R2 Race Finished");
             gameEnded = true;
           } else {
             // Not all black -> Just a crossing
+            Serial.println("R2 Turning Left at Junction");
             turnLeftMillis(120);
           }
         }
         break;
         
       case LEFT_LINE:
+        Serial.println("R2 Turning Left");
         turnLeftMillis(140);
         readSensors();
         {
@@ -202,6 +223,7 @@ void loop() {
         break;
         
       case NO_LINE:
+        Serial.println("R2 I lost the line And now I try searching for it");
         turnAroundMillis();
         break;
         
