@@ -162,12 +162,17 @@ void lineFollow() {
   }
 
   if (leftSeen && rightSeen) {
+    if(lastTurn != 0) {
+      // Serial.println("R1 Moving Forward"); // Optional, maybe too noisy
+    }
     lastTurn = 0;
     forward(BASE_SPEED);
   } else if (rightSeen) {
+    if(lastTurn != -1) Serial.println("R1 Turning Right");
     lastTurn = -1;
     rightFwd_leftBwd();
   } else if (leftSeen) {
+    if(lastTurn != 1) Serial.println("R1 Turning Left");
     lastTurn = 1;
     leftFwd_rightBwd();
   } else {
@@ -199,6 +204,8 @@ void startingSequence() {
     stopMotors();
     delay(30);
   }
+
+  Serial.println("R1 I started the race , picking up cone.");
 
   unsigned long t = millis();
   while (millis() - t < 1000) gripper(gripper_open);
@@ -250,6 +257,8 @@ bool endingSequence() {
 
     stopMotors();
 
+    Serial.println("R1 Race Finished");
+
     while (true); // END PROGRAM
   }
 
@@ -270,6 +279,9 @@ void setup() {
 
   pinMode(GRIPPER, OUTPUT);
 
+  Serial.begin(9600);
+  Serial.println("R1 Robot Online");
+
   pixels.begin();
   pixels.clear();
   pixels.show();
@@ -277,6 +289,13 @@ void setup() {
 
 // ================= LOOP =================
 void loop() {
+
+  static unsigned long lastSpeedReport = 0;
+  if (millis() - lastSpeedReport > 1000) {
+     Serial.print("R1 Motor Speed: ");
+     Serial.println(BASE_SPEED); 
+     lastSpeedReport = millis();
+  }
 
   if (start == 0) {
     start++;
@@ -291,6 +310,7 @@ void loop() {
   }
 
   if (!avoiding && obstacleCount >= CONFIRM_COUNT) {
+    Serial.println("R1 OBJECT AHEAD!!!");
     avoiding = true;
     avoidStage = 0;
     stageStartTime = millis();
