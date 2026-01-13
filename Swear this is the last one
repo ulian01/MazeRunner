@@ -158,6 +158,7 @@ void setup() {
   // Initialize Serial (for wireless module)
   Serial.begin(9600);
   delay(100);      // Wait for stabilization
+  Serial.println("R3 Robot Online");
   
   // Initial state: Stopped with Red LEDs
   neoStop(); 
@@ -179,12 +180,47 @@ void setup() {
 // --- Main Loop (Runs Repeatedly) ---
 void loop() {
   static long phaseStartTime = millis(); // Timer for phases
-  static int phase = 0;                  // Current phase number
+  static int phase = -1;                 // Current phase number (-1 = Waiting for Start)
   static bool wallDetected = false;      // Flag for wall obstacle
   static unsigned long allBlackStartTime = 0; // Timer for end-of-maze detection
+  
+  // ==================== PHASE -1: Wait for Signal ====================
+  if (phase == -1) {
+    static unsigned long lastHeartbeat = 0;
+    if (millis() - lastHeartbeat >= 2000) {
+      Serial.println("R3 Waiting for start signal..."); 
+      lastHeartbeat = millis();
+    }
+  
+    if (Serial.available() > 0) {
+      String income = Serial.readStringUntil('\n');
+      income.trim();
+      
+      // Listen for generic START or specific R3:START_R3 / R3:START
+      if (income.equalsIgnoreCase("START") || 
+          income.equalsIgnoreCase("START_R3") || 
+          income.equalsIgnoreCase("R3:START_R3") || 
+          income.equalsIgnoreCase("R3:START")) {
+        
+        Serial.println("R3 Start Signal Received!");
+        Serial.println("R3 I started the race");
+        phase = 0; // Move to Phase 0
+        phaseStartTime = millis();
+      }
+    }
+    return; // Keep waiting
+  }
+  
   static bool allBlackDetected = false;  // Flag for stable end-of-maze signal
   static const char* lastDirection = "IDLE"; // Debug string
   
+  // Status Report: Speed (every 1 sec)
+  static unsigned long lastSpeedReport = 0;
+  if (millis() - lastSpeedReport > 1000) {
+      Serial.print("R3 Motor Speed: ");
+      Serial.println(FORWARD_SPEED);
+      lastSpeedReport = millis();
+  }
   
   // ==================== PHASE 0: Initial Move Forward ====================
   if (phase == 0) {
@@ -203,6 +239,7 @@ void loop() {
   else if (phase == 1) {
     lastDirection = "STOPPED";
     stopMotors();                 // Ensure stopped
+    Serial.println("R3 Picking up Cone");
     gripper(GRIPPER_CLOSE);       // Close gripper
     
     // Wait for 500 ms
@@ -230,6 +267,7 @@ void loop() {
   else if (phase == 3) {
     lastDirection = "TURN_LEFT";
     gripper(GRIPPER_CLOSE);       // Keep gripping
+    Serial.println("R3 Turning Left (Initial)");
     startturnLeft();              // Turn left
     
     // Turn duration (Adjust this if turning too much/little)
@@ -272,7 +310,9 @@ void loop() {
       } else if (millis() - allBlackStartTime >= 500) {
         // Confirmed End of Maze!
         stopMotors();
+        Serial.println("R3 Dropping Cone");
         gripper(GRIPPER_OPEN);    // Drop payload
+        Serial.println("R3 Race Finished");
         phase = 5;                // Go to End Phase
         return;
       }
@@ -288,6 +328,7 @@ void loop() {
     
     // If obstacle is close (< 15cm)
     if (currentDistance > 0 && currentDistance < 15.0) {
+      Serial.println("R3 OBJECT FOUND!!!");
       stopMotors();
       wallDetected = true;        // Flag that we hit a wall
       
@@ -307,6 +348,7 @@ void loop() {
         // If Right is open (> 25cm)
         if (rightDistance > 0 && rightDistance > 25.0) {
           moveServo(70, 200);     // Centers head
+          Serial.println("R3 Turning Right (Wall Avoidance)");
           turnRight();            // Turn robot right
           delay(500);             // Turn duration
           stopMotors();
@@ -321,6 +363,7 @@ void loop() {
           // If Left is open (> 25cm)
           if (leftDistance > 0 && leftDistance > 25.0) {
             moveServo(70, 200);   // Center head
+            Serial.println("R3 Turning Left (Wall Avoidance)");
             turnLeft();           // Turn robot left
             delay(500);           // Turn duration
             stopMotors();
@@ -328,6 +371,7 @@ void loop() {
           } 
           else {
             // Dead End (Both blocked) -> Back up and Turn Around
+            Serial.println("R3 Stuck - Trying to get out (Dead End)");
             moveServo(70, 200);   // Center head
             backwardMove();       // Back up
             delay(400);
@@ -358,6 +402,7 @@ void loop() {
           
           // If stuck twice consecutive checks -> Recovery
           if (stuckCounter >= 2) {
+            Serial.println("R3 Stuck - Trying to get out (No Progress)");
             stopMotors();
             delay(100);
             backwardMove();       // Back up
