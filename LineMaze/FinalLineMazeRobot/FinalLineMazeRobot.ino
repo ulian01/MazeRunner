@@ -33,31 +33,26 @@ void loop() {
       lastHeartbeat = currentTime;
     }
 
-    if (currentTime - lastCheckTime >= checkInterval) {
-      lastCheckTime = currentTime;
+    // Check for Server Start Signal
+    if (Serial.available() > 0) {
+      String income = Serial.readStringUntil('\n');
+      income.trim(); // Remove whitespace/newlines
       
-      int distance = getDistance();
-      if (distance < MAX_DISTANCE_TO_CHECK && distance > MIN_DISTANCE_TO_CHECK){        
-        distanceReadings[readingIndex] = distance;
-        readingIndex = (readingIndex + 1) % NUM_READINGS;
-        
-        if (readingCount < NUM_READINGS) {
-          readingCount++;
-        }
-        
-        if (readingCount >= NUM_READINGS) {
-          Serial.println("*** OTHER ROBOT CONFIRMED! ***");
-          delay(3000);
-          Serial.println("R2 I started the race");
-          otherRobotDetected = true;
-        }
-      } else {
-        readingCount = 0;
+      // Check for Start commands
+      if (income.equalsIgnoreCase("START") || 
+          income.equalsIgnoreCase("START_R2") || 
+          income.equalsIgnoreCase("R2:START_R2") || 
+          income.equalsIgnoreCase("R2:START")) {
+        Serial.println("R2 Start Signal Received!");
+        Serial.println("R2 I started the race");
+        otherRobotDetected = true; // Breaks the wait loop
       }
     }
+
+
   }
 
-  int unsigned currentTime = millis();
+  unsigned long currentTime = millis();
   if(conePickedUp) {
     if (currentTime - previousTime >= gripperInterval) {
       previousTime = currentTime;
