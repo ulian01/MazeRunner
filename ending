@@ -1,0 +1,798 @@
+#include <Arduino.h>             // Include the main Arduino library for standard functions
+#include <Servo.h>               // Include the Servo library to control servo motors
+#include <Adafruit_NeoPixel.h>   // Include the Adafruit NeoPixel library for controlling LEDs
+
+// --- Motor Pin Definitions ---
+#define LEFT_BWD   11            // Pin for left motor backward motion
+#define LEFT_FWD   6             // Pin for left motor forward motion
+#define RIGHT_BWD  5             // Pin for right motor backward motion
+#define RIGHT_FWD  3             // Pin for right motor forward motion
+
+// --- Sensor Pin Definitions ---
+// (Some pins like ROTATTION_SENSOR_PIN appeared to be unused in the logic)
+#define ROTATTION_SENSOR_PIN 10
+#define ROTATTION_SENSOR_PIN_2 9
+
+// --- HC-12 Wireless Module Pins ---
+// (Using Hardware Serial pins 0 and 1)
+#define HC12_RX 0                // Serial Receive pin
+#define HC12_TX 1                // Serial Transmit pin
+
+// --- NeoPixel LED Pins ---
+#define NEOPIXEL_IN 2            // Single data pin for all NeoPixels
+
+// We drive all NeoPixels from a single data pin. 
+#define LEFT_NEOPIXELS 2         // Number of LEDs for the left indicator
+#define RIGHT_NEOPIXELS 2        // Number of LEDs for the right indicator
+
+// --- Servo & Ultrasonic Sensor Pins ---
+#define ECHO       12            // Ultrasonic sensor Echo pin (Input)
+#define TRIG       4             // Ultrasonic sensor Trigger pin (Output)
+#define SERVO_PIN  8             // Pin for the servo motor controlling the sensor neck
+
+// --- Line Sensor Setup ---
+#define NUM_SENSORS 8            // Total number of line sensors
+
+// --- Gripper Pins & Settings ---
+#define GRIPPER     13           // Pin to control the gripper servo/motor
+#define GRIPPER_OPEN  1500       // Pulse width value to open the gripper
+#define GRIPPER_CLOSE 1050       // Pulse width value to close the gripper
+
+// --- Start Sequence Constants ---
+const int START_LEFT_SPEED = 205;        // Base speed for left motor at start
+const int START_RIGHT_SPEED = 200;       // Base speed for right motor at start
+const int START_TURN_LEFT_SPEED = 155;   // Turning speed for left motor during start
+const int START_TURN_RIGHT_SPEED = 160;  // Turning speed for right motor during start 
+
+// --- Line Sensor Threshold ---
+const int BLACK_THRESHOLD = 200;         // Threshold value to distinguish black line from white surface
+                                         // Values < 200 are Black, > 200 are White.
+
+// Array defining the analog pins connected to the line sensors
+int sensorPins[NUM_SENSORS] = {              
+    A7, A6, A5, A4, A3, A2, A1, A0       // Sensors connected from A7 down to A0
+};
+int sensorValues[NUM_SENSORS];           // Array to store the latest readings from sensors
+
+// --- Motor Speed & Navigation Constants ---
+const int FORWARD_SPEED       = 180;     // Standard forward speed for the robot
+const int FORWARD_SPEED_WEAK  = 185;     // Slightly different speed (likely to correct drift)
+const int TURN_SPEED          = 160;     // Standard turning speed
+const int TURN_SPEED_WEAK     = 165;     // Slightly different turning speed
+const float WALL_DIST         = 6.0;     // Target distance from walls (in cm)
+const float CLEAR_DIST        = 15.0;    // Minimum distance to consider a path "clear" (in cm)
+
+const unsigned long TURN_90_LEFT  = 525; // Duration (ms) to turn 90 degrees left
+const unsigned long TURN_90_RIGHT = 650; // Duration (ms) to turn 90 degrees right
+const unsigned long TURN_180      = 1200;// Duration (ms) to turn 180 degrees around
+
+const unsigned long TIME_FOR_30CM = 2000;      // Estimated time to travel 30cm
+const unsigned long FORWARD_BEFORE_TURN = 700; // Time to move forward before executing a turn
+String lastNeoState = "NONE";                  // Tracks the last state of the LEDs to avoid unnecessary updates
+
+// --- Function Prototypes ---
+// (Declaring functions before using them)
+void forwardMove();
+void backwardMove();
+void stopMotors();
+void turnRight();
+void turnLeft();
+int findBestDirection();
+void startTurnLeft(unsigned long duration);
+void startTurnRight(unsigned long duration);
+void startBackward(unsigned long duration);
+void startEnteringOpening();
+void backtrack();
+void readlineSensors();
+void startturnLeft();
+void startmoveForward();
+void gripper(int pulse);
+void servoInit();
+void servoWrite(int angle);
+float readDistance();
+float readDistanceFiltered();
+void moveServo(int angle, unsigned long duration);
+
+// NeoPixel helpers
+void neoInit();
+void neoLeft();
+void neoRight();
+void neoStraight();
+void neoStop();
+
+// --- Global Variables ---
+
+volatile bool scanningActive = false;    // Flag to indicate if the sensor is currently scanning
+int headState = 0;                       // State variable for the sensor head movement
+unsigned long headStateStart = 0;        // Timer for head movement states
+float currentDistance = 0;               // Storage for the most recent distance reading
+bool isGlancing = false;                 // Flag for a quick "glance" check
+
+unsigned long segmentStartTime = 0;      // Timer start for the current movement segment
+bool justTurned = false;                 // Flag indicating if a turn was just completed
+bool drivingIntoOpening = false;         // Flag if we are currently driving into a new path
+
+// Stuck detection
+unsigned long lastStuckCheck = 0;        // Last time we checked if the robot was stuck
+float lastStuckDist = 0;                 // Distance reading at the last stuck check
+int stuckCounter = 0;                    // Counter for how many times we've detected being stuck
+int totalStuckAttempts = 0;              // Total number of times we've tried to get unstuck
+
+#define MAX_PATH 200                     // Maximum length of the path memory
+char path[MAX_PATH];                     // Array to store the path taken (L, R, F, B)
+int pathIndex = 0;                       // Current index in the path array
+
+// State machine states
+enum RobotState { MOVING_FORWARD, TURNING_LEFT, TURNING_RIGHT, BACKING_UP, ENTERING_OPENING };
+RobotState currentState = MOVING_FORWARD;// Initial state
+unsigned long actionStartTime = 0;       // When the current action started
+unsigned long actionDuration  = 0;       // How long the current action should last
+
+// NeoPixel strip configuration
+const uint8_t TOTAL_PIXELS = LEFT_NEOPIXELS + RIGHT_NEOPIXELS; // Total LED count
+const uint8_t LEFT_START   = 0;          // Starting index for left LEDs
+const uint8_t RIGHT_START  = LEFT_NEOPIXELS; // Starting index for right LEDs
+// Initialize NeoPixel strip object
+Adafruit_NeoPixel strip(TOTAL_PIXELS, NEOPIXEL_IN, NEO_GRB + NEO_KHZ800);
+
+// --- Setup Function (Runs Once) ---
+void setup() {
+  // Configure motor pins as outputs
+  pinMode(LEFT_FWD, OUTPUT);
+  pinMode(LEFT_BWD, OUTPUT);
+  pinMode(RIGHT_FWD, OUTPUT);
+  pinMode(RIGHT_BWD, OUTPUT);
+  
+  // Configure sensor pins
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+  
+  // Configure gripper pin
+  pinMode(GRIPPER, OUTPUT);
+  digitalWrite(GRIPPER, 1); // Trigger signal high
+  digitalWrite(GRIPPER, 0); // Trigger signal low
+
+  // Initialize systems
+  servoInit();     // Servo
+  neoInit();       // LEDs
+  
+  // Initialize Serial (for wireless module)
+  Serial.begin(9600);
+  delay(100);      // Wait for stabilization
+  Serial.println("R3 Robot Online");
+  
+  // Initial state: Stopped with Red LEDs
+  neoStop(); 
+    
+  // Center the head and ensure motors are stopped
+  servoWrite(70);
+  stopMotors();
+  segmentStartTime = millis();
+
+  // Pulse the gripper at startup to ensure it opens
+  for (int i = 0; i < 50; i++) {
+    digitalWrite(GRIPPER, HIGH);
+    delayMicroseconds(GRIPPER_OPEN);
+    digitalWrite(GRIPPER, LOW);
+    delay(20);
+  }
+}
+
+// --- Main Loop (Runs Repeatedly) ---
+void loop() {
+  static long phaseStartTime = millis(); // Timer for phases
+  static int phase = -1;                 // Current phase number (-1 = Waiting for Start)
+  static bool wallDetected = false;      // Flag for wall obstacle
+  static unsigned long allBlackStartTime = 0; // Timer for end-of-maze detection
+  
+  // ==================== PHASE -1: Wait for Signal ====================
+  if (phase == -1) {
+    static unsigned long lastHeartbeat = 0;
+    if (millis() - lastHeartbeat >= 2000) {
+      Serial.println("R3 Waiting for start signal..."); 
+      lastHeartbeat = millis();
+    }
+  
+    if (Serial.available() > 0) {
+      String income = Serial.readStringUntil('\n');
+      income.trim();
+      
+      // Listen for generic START or specific R3:START_R3 / R3:START
+      if (income.equalsIgnoreCase("START") || 
+          income.equalsIgnoreCase("START_R3") || 
+          income.equalsIgnoreCase("R3:START_R3") || 
+          income.equalsIgnoreCase("R3:START")) {
+        
+        Serial.println("R3 Start Signal Received!");
+        Serial.println("R3 I started the race");
+        phase = 0; // Move to Phase 0
+        phaseStartTime = millis();
+      }
+    }
+    return; // Keep waiting
+  }
+  
+  static bool allBlackDetected = false;  // Flag for stable end-of-maze signal
+  static const char* lastDirection = "IDLE"; // Debug string
+  
+  // Status Report: Speed (every 1 sec)
+  static unsigned long lastSpeedReport = 0;
+  if (millis() - lastSpeedReport > 1000) {
+      Serial.print("R3 Motor Speed: ");
+      Serial.println(FORWARD_SPEED);
+      lastSpeedReport = millis();
+  }
+  
+  // ==================== PHASE 0: Initial Move Forward ====================
+  if (phase == 0) {
+    lastDirection = "FORWARD";
+    startmoveForward(); // Move forward blindly at start speed
+    
+    // Run for 1100 ms
+    if (millis() - phaseStartTime >= 1100) {
+      stopMotors();
+      phase = 1;                  // Go to Phase 1
+      phaseStartTime = millis();  // Reset timer
+    }
+  } 
+  
+  // ==================== PHASE 1: Stop and Grab ====================
+  else if (phase == 1) {
+    lastDirection = "STOPPED";
+    stopMotors();                 // Ensure stopped
+    Serial.println("R3 Picking up Cone");
+    gripper(GRIPPER_CLOSE);       // Close gripper
+    
+    // Wait for 500 ms
+    if (millis() - phaseStartTime >= 500) {
+      phase = 2;                  // Go to Phase 2
+      phaseStartTime = millis();
+    }
+  }
+  
+  // ==================== PHASE 2: Short Forward Move ====================
+  else if (phase == 2) {
+    lastDirection = "FORWARD";
+    gripper(GRIPPER_CLOSE);       // Keep gripping
+    startmoveForward();           // Move forward
+    
+    // Run for 300 ms
+    if (millis() - phaseStartTime >= 150) {
+      stopMotors();
+      phase = 3;                  // Go to Phase 3
+      phaseStartTime = millis();
+    }
+  }
+  
+  // ==================== PHASE 3: Initial Turn Left ====================
+  else if (phase == 3) {
+    lastDirection = "TURN_LEFT";
+    gripper(GRIPPER_CLOSE);       // Keep gripping
+    Serial.println("R3 Turning Left (Initial)");
+    startturnLeft();              // Turn left
+    
+    // Turn duration (Adjust this if turning too much/little)
+    if (millis() - phaseStartTime >= 500) {
+      stopMotors();
+      phase = 4;                  // Go to Main Maze Phase
+      phaseStartTime = millis();
+      wallDetected = false;
+    }
+  }
+  
+  // ==================== PHASE 4: Maze Solving (Ultrasonic) ====================
+  else if (phase == 4) {
+    static bool blackLineDetected = false;        // Flag for black line detection
+    static unsigned long blackLineStartTime = 0;  // Timer for line following start
+    
+    // Timeout Safety: If solving takes > 180 seconds, stop.
+    if (millis() - phaseStartTime > 180000) {
+      stopMotors();
+      gripper(GRIPPER_CLOSE);
+      phase = 2; // (Looping back or error state)
+      return;
+    }
+    
+    // 1. Check Floor for End of Maze (All Black) or Black Line Detection
+    readlineSensors();
+    
+    // Check if ALL sensors see black (End of maze condition)
+    bool allBlack = true;
+    bool anyBlack = false; // Check if ANY sensor sees black
+    
+    for (int i = 0; i < NUM_SENSORS; i++) {
+      if (sensorValues[i] >= BLACK_THRESHOLD) {
+        allBlack = false; // Found white
+      } else {
+        anyBlack = true;  // Found black
+      }
+    }
+    
+    // --- BLACK LINE FOLLOWING LOGIC ---
+    if (anyBlack && !blackLineDetected) {
+      // A black line has been detected!
+      blackLineDetected = true;
+      blackLineStartTime = millis();
+      Serial.println("R3 Black line detected - Starting line following");
+      stopMotors();
+    }
+    
+    // If we are following a black line
+    if (blackLineDetected) {
+      // Check if all sensors are black (end condition)
+      if (allBlack) {
+        // All sensors see black - we've reached the end!
+        Serial.println("R3 All sensors detect black - Stopping and dropping cone");
+        stopMotors();
+        delay(200);
+        gripper(GRIPPER_OPEN);    // Drop cone
+        Serial.println("R3 Cone dropped");
+        phase = 5;                // Go to End Phase
+        return;
+      }
+      
+      // Centre the robot on the black line by checking sensor positions
+      // Find which sensors see black
+      int leftmostBlack = -1;
+      int rightmostBlack = -1;
+      int centerBlack = -1;
+      
+      for (int i = 0; i < NUM_SENSORS; i++) {
+        if (sensorValues[i] < BLACK_THRESHOLD) {
+          if (leftmostBlack == -1) leftmostBlack = i;
+          rightmostBlack = i;
+        }
+      }
+      
+      // Calculate center of black line
+      if (leftmostBlack != -1 && rightmostBlack != -1) {
+        centerBlack = (leftmostBlack + rightmostBlack) / 2;
+        int robotCenter = NUM_SENSORS / 2; // Center sensor index (should be 4 for 8 sensors)
+        
+        // Adjust robot to center on the line
+        if (centerBlack < robotCenter - 1) {
+          // Black line is on the left, turn left to center
+          turnLeft();
+          delay(50);
+          stopMotors();
+        } else if (centerBlack > robotCenter + 1) {
+          // Black line is on the right, turn right to center
+          turnRight();
+          delay(50);
+          stopMotors();
+        } else {
+          // Robot is centered on the line, move forward
+          forwardMove();
+        }
+      }
+    }
+    // If no black line detected yet, use ultrasonic navigation
+    else {
+      // 2. Navigation with Ultrasonic Sensor
+      servoWrite(70);               // Look forward
+      currentDistance = readDistanceFiltered(); // Measure distance
+      
+      gripper(GRIPPER_CLOSE);       // Ensure we hold the object
+      
+      // If obstacle is close (< 15cm)
+      if (currentDistance > 0 && currentDistance < 13.0) {
+        Serial.println("R3 OBJECT FOUND!!!");
+        stopMotors();
+        wallDetected = true;        // Flag that we hit a wall
+        
+        static unsigned long lastWallCheck = 0;
+        
+        // Limit check rate to every 300ms
+        if (millis() - lastWallCheck > 300) {
+          lastWallCheck = millis();
+          
+          // --- Wall Logic: Check Right then Left ---
+          
+          // Look Right (Angle 10)
+          moveServo(10, 250);
+          delay(250);
+          float rightDistance = readDistanceFiltered();
+          
+          // If Right is open (> 25cm)
+          if (rightDistance > 0 && rightDistance > 25.0) {
+            moveServo(70, 200);     // Centers head
+            Serial.println("R3 Turning Right (Wall Avoidance)");
+            turnRight();            // Turn robot right
+            delay(500);             // Turn duration
+            stopMotors();
+            wallDetected = false;
+          } 
+          else {
+            // Right blocked -> Look Left (Angle 130)
+            moveServo(130, 300);
+            delay(300);
+            float leftDistance = readDistanceFiltered();
+            
+            // If Left is open (> 25cm)
+            if (leftDistance > 0 && leftDistance > 25.0) {
+              moveServo(70, 200);   // Center head
+              Serial.println("R3 Turning Left (Wall Avoidance)");
+              turnLeft();           // Turn robot left
+              delay(500);           // Turn duration
+              stopMotors();
+              wallDetected = false;
+            } 
+            else {
+              // Dead End (Both blocked) -> Back up and Turn Around
+              Serial.println("R3 Stuck - Trying to get out (Dead End)");
+              moveServo(70, 200);   // Center head
+              backwardMove();       // Back up
+              delay(400);
+              stopMotors();
+              delay(100);
+              
+              turnRight();          // Turn 180 (conceptually)
+              delay(1300);          // Longer delay for 180 turn
+              stopMotors();
+              wallDetected = false;
+            }
+          }
+        }
+      }
+      // No obstacle ahead
+      else if (!wallDetected) {
+        servoWrite(70);             // Look forward
+        forwardMove();              // Go!
+        
+        // 3. Stuck Detection
+        // (If we think we are moving forward, but distance to wall doesn't change)
+        if (millis() - lastStuckCheck > 300) {
+          float distChange = abs(currentDistance - lastStuckDist);
+          
+          // If distance unchanged (< 2cm) but we see a wall (< 50cm)
+          if (distChange < 2.0 && currentDistance > 0 && currentDistance < 50.0) {
+            stuckCounter++;
+            
+            // If stuck twice consecutive checks -> Recovery
+            if (stuckCounter >= 2) {
+              Serial.println("R3 Stuck - Trying to get out (No Progress)");
+              stopMotors();
+              delay(100);
+              backwardMove();       // Back up
+              delay(500);
+              stopMotors();
+              delay(100);
+              
+              // Intelligence: Check which side is open, but alternate strategy if stuck repeatedly
+              int bestDir = findBestDirection();
+              
+              totalStuckAttempts++; // Increment total attempts
+              
+              // If we have tried significantly (e.g., > 3 times) and failed, force a RIGHT turn
+              // This handles cases where "Best Direction" leads us back into the stuck spot
+              if (totalStuckAttempts > 3) {
+                   Serial.println("Stuck loop detected! Forcing RIGHT turn.");
+                   turnRight(); 
+                   // Reset after a forced move to try normal logic again later
+                   if (totalStuckAttempts > 5) totalStuckAttempts = 0; 
+              }
+              else {
+                // Normal Logic: Use sensors
+                if (bestDir == 10) {
+                   turnRight(); // Twist Right
+                } else if (bestDir == 130) {
+                   turnLeft();  // Twist Left
+                } else {
+                   turnRight(); // Default Twist Right if both blocked/uncertain
+                }
+              }
+              
+              delay(400);
+              stopMotors();
+              stuckCounter = 0;   // Reset specific counter
+            }
+          } else {
+            stuckCounter = 0;       // Moving fine
+            totalStuckAttempts = 0; // Reset total attempts since we moved successfully
+          }
+          
+          lastStuckDist = currentDistance;
+          lastStuckCheck = millis();
+        }
+      }
+    }
+  }
+  
+  // ==================== PHASE 5: Finished ====================
+  else if (phase == 5) {
+    stopMotors();
+    gripper(GRIPPER_OPEN);
+    // Do nothing, just stay stopped
+  }
+}
+
+// --- Helper Functions ---
+
+// Global Servo object
+Servo neckServo;
+
+// Initialize Servo
+void servoInit() {
+  neckServo.attach(SERVO_PIN);
+  neckServo.write(70); // Center
+}
+
+// Write to Servo (SAFE)
+void servoWrite(int angle) {
+  angle = constrain(angle, 0, 180); // Protect boundaries
+  neckServo.write(angle);
+}
+
+// Move Servo with Delay
+void moveServo(int angle, unsigned long duration) {
+    servoWrite(angle);
+    delay(duration); // Wait for move
+}
+
+// Read Ultrasonic Distance (Raw)
+float readDistance() {
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  
+  digitalWrite(TRIG, HIGH);      // Send pulse
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+  
+  long duration = pulseIn(ECHO, HIGH, 30000); // Read echo
+  
+  if (duration == 0) return 0;   // Timeout
+  
+  // Convert time to cm (Speed of Sound)
+  return duration * 0.0343 / 2.0;
+}
+
+// Read Ultrasonic Distance (Filtered Median)
+float readDistanceFiltered() {
+  float d1 = readDistance();
+  delay(2);
+  float d2 = readDistance();
+  delay(2);
+  float d3 = readDistance();
+
+  // Return Median of 3
+  if ((d1 <= d2 && d2 <= d3) || (d3 <= d2 && d2 <= d1)) return d2;
+  if ((d2 <= d1 && d1 <= d3) || (d3 <= d1 && d1 <= d2)) return d1;
+  return d3;
+}
+
+// Set range of NeoPixels color
+static void setStripColor(uint8_t startIdx, uint8_t count, uint8_t r, uint8_t g, uint8_t b) {
+  for (uint16_t i = startIdx; i < startIdx + count && i < strip.numPixels(); i++) {
+    strip.setPixelColor(i, strip.Color(r, g, b));
+  }
+}
+
+// Show Red Stop Lights
+static void showStop() {
+  setStripColor(0, TOTAL_PIXELS, 255, 0, 0);
+  strip.show();
+}
+
+// Initialize NeoPixels
+void neoInit() {
+  strip.begin();
+  strip.setBrightness(60);
+  showStop();
+}
+
+// Show Turning Left Lights
+void neoLeft() {
+  if (lastNeoState != "LEFT"){
+  setStripColor(LEFT_START, LEFT_NEOPIXELS, 0, 255, 0);       // Left Green
+  setStripColor(RIGHT_START, RIGHT_NEOPIXELS, 255, 255, 255); // Right White
+  strip.show();
+  lastNeoState = "LEFT";
+  }
+}
+
+// Show Turning Right Lights
+void neoRight() {
+  if (lastNeoState != "RIGHT"){
+  setStripColor(RIGHT_START, RIGHT_NEOPIXELS, 0, 255, 0);     // Right Green
+  setStripColor(LEFT_START, LEFT_NEOPIXELS, 255, 255, 255);   // Left White
+  strip.show();
+  lastNeoState = "RIGHT";
+  }
+}
+
+// Show Forward Lights
+void neoStraight() {
+  if (lastNeoState != "STRAIGHT"){
+  setStripColor(0, TOTAL_PIXELS, 255, 255, 255);              // All White
+  strip.show();
+  lastNeoState = "STRAIGHT";
+}
+}
+
+// Show Stop Lights (with State Check)
+void neoStop() {
+  if (lastNeoState != "STOP"){
+  showStop();
+  lastNeoState = "STOP";
+}
+}
+
+// --- Movement Implementation ---
+
+void forwardMove() {
+  neoStraight();
+  analogWrite(LEFT_FWD, FORWARD_SPEED_WEAK);
+  analogWrite(RIGHT_FWD, FORWARD_SPEED);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void backwardMove() {
+  analogWrite(LEFT_BWD, FORWARD_SPEED_WEAK);
+  analogWrite(RIGHT_BWD, FORWARD_SPEED);
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+}
+
+void stopMotors() {
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+  neoStop();
+}
+
+void turnRight() {
+  neoRight();
+  analogWrite(LEFT_FWD, TURN_SPEED_WEAK);
+  analogWrite(RIGHT_BWD, TURN_SPEED);
+  analogWrite(RIGHT_FWD, 0);
+  analogWrite(LEFT_BWD, 0);
+}
+
+void turnLeft() {
+  neoLeft();
+  analogWrite(RIGHT_FWD, TURN_SPEED);
+  analogWrite(LEFT_BWD, TURN_SPEED_WEAK);
+  analogWrite(LEFT_FWD, 0);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+// (Optional) Best Direction Finder
+int findBestDirection() {
+  scanningActive = true;
+  isGlancing = false;
+  headState = 0;
+
+  float leftDist = 0, rightDist = 0;
+
+  // Look Right
+  moveServo(10, 300);
+  delay(60);
+  rightDist = readDistanceFiltered();
+
+  // Look Left
+  moveServo(130, 300);
+  delay(60);
+  leftDist = readDistanceFiltered();
+
+  // Center
+  moveServo(70, 200);
+  scanningActive = false;
+
+  bool rightBlocked = (rightDist < CLEAR_DIST);
+  bool leftBlocked  = (leftDist < CLEAR_DIST);
+
+  if (!rightBlocked && !leftBlocked) {
+    return (rightDist > leftDist) ? 10 : 130; // Pick larger gap
+  } else if (!rightBlocked) {
+    return 10;
+  } else if (!leftBlocked) {
+    return 130;
+  } else {
+    return 0; // Turn around
+  }
+}
+
+// --- Path Tracking Helpers ---
+
+void startTurnLeft(unsigned long duration) {
+  turnLeft();
+  currentState = TURNING_LEFT;
+  actionStartTime = millis();
+  actionDuration = duration;
+  justTurned = true;
+  path[pathIndex++] = 'L'; // Save 'L' to path
+}
+
+void startTurnRight(unsigned long duration) {
+  turnRight();
+  currentState = TURNING_RIGHT;
+  actionStartTime = millis();
+  actionDuration = duration;
+  justTurned = true;
+  path[pathIndex++] = 'R'; // Save 'R' to path
+}
+
+void startBackward(unsigned long duration) {
+  backwardMove();
+  currentState = BACKING_UP;
+  actionStartTime = millis();
+  actionDuration = duration;
+  path[pathIndex++] = 'B';
+}
+
+void startEnteringOpening() {
+  forwardMove();
+  currentState = ENTERING_OPENING;
+  actionStartTime = millis();
+  actionDuration = FORWARD_BEFORE_TURN;
+  path[pathIndex++] = 'F';
+}
+
+void backtrack() {
+  if (pathIndex > 0) {
+    char lastMove = path[--pathIndex];
+    Serial.print("Backtracking, undoing: ");
+    Serial.println(lastMove);
+
+    if (lastMove == 'L') {
+      startTurnRight(TURN_90_RIGHT);
+    } else if (lastMove == 'R') {
+      startTurnLeft(TURN_90_LEFT);
+    } else if (lastMove == 'F') {
+      startBackward(800);
+    } else if (lastMove == 'B') {
+      forwardMove();
+    }
+  }
+}
+
+// Start Sequence Helpers
+void startturnLeft(){
+  neoLeft();
+  analogWrite(LEFT_FWD, 0);                   
+  analogWrite(LEFT_BWD, START_TURN_LEFT_SPEED);
+  analogWrite(RIGHT_FWD, START_TURN_RIGHT_SPEED);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+void startmoveForward(){
+  neoStraight();
+  analogWrite(LEFT_FWD, START_LEFT_SPEED);
+  analogWrite(LEFT_BWD, 0);
+  analogWrite(RIGHT_FWD, START_RIGHT_SPEED);
+  analogWrite(RIGHT_BWD, 0);
+}
+
+// Line Sensor Reader (Optimized)
+void readlineSensors(){
+  static int lastSensorValues[NUM_SENSORS];
+  static unsigned long timer;
+
+  if (millis() > timer){
+    for (int i = 0; i < NUM_SENSORS; i++){
+      int currentValue = analogRead(sensorPins[i]);
+      if (lastSensorValues[i] != currentValue){
+        lastSensorValues[i] = currentValue;
+      }
+      sensorValues[i] = lastSensorValues[i];
+    }
+    timer = millis() + 150; // Check every 150ms
+  }
+}
+
+// Pulse Gripper
+void gripper(int pulse){
+  static long last_pulse;
+  static unsigned long timer;
+  if (millis() - timer > 100){
+    if (last_pulse != pulse){
+      last_pulse = pulse;
+    }
+    digitalWrite(GRIPPER, 1);
+    delayMicroseconds(last_pulse);
+    digitalWrite(GRIPPER, 0);
+    timer = millis()+50;
+  }
+}
